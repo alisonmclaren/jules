@@ -210,7 +210,9 @@ USE jules_science_fixes_mod, ONLY: ctile_orog_fix, correct_sea_adjust_land,    &
 USE jules_water_tracers_mod, ONLY: l_wtrac_jls
 USE sf_resist_wtrac_mod,     ONLY: sf_resist_wtrac
 USE sf_evap_srce_frac_mod,   ONLY: sf_evap_srce_frac
-USE sf_flux_land_wtrac_mod,  ONLY: sf_flux_land_wtrac, sf_flux_land_check_wtrac
+USE sf_flux_land_norm_mod,   ONLY: sf_flux_land_norm,                          &
+                                   sf_flux_land_check_wtrac
+USE sf_flux_land_nofrac_wtrac_mod,  ONLY: sf_flux_land_nofrac_wtrac
 
 USE ereport_mod, ONLY: ereport
 USE errormessagelength_mod, ONLY: errormessagelength
@@ -967,9 +969,13 @@ REAL(KIND=real_jlslsm), ALLOCATABLE ::                                         &
 ,evap_srce_frac(:,:,:)                                                         &
                              ! Evaporative source fractional contribution
                              ! to total evaporation from tile
-,q_elev_wtrac(:,:,:)
+,q_elev_wtrac(:,:,:)                                                           &
                              ! Water tracer specific humidity at elevated
                              ! height
+,fqw_evapsrce_norm(:,:,:)
+                             ! Normal water surface FQW for each
+                             !     evaporative source for land tiles
+
 
 ! dummy arrays required for sea and se-ice to create universal
 ! routines for all surfaces
@@ -2732,12 +2738,30 @@ IF (sf_diag%su10 .OR. sf_diag%sv10 .OR. sf_diag%sq1p5 .OR.                     &
 
 END IF
 
-
 ! Calculate water tracer surface fluxes
 IF (l_wtrac_jls) THEN
 
   ALLOCATE(resf_wtrac(land_pts,n_evap_srce,nsurft,n_wtrac_jls))
   ALLOCATE(evap_srce_frac(land_pts,n_evap_srce,nsurft))
+  ALLOCATE(fqw_evapsrce_norm(land_pts,n_evap_srce,nsurft))
+
+!$OMP PARALLEL DEFAULT(NONE) PRIVATE(l, n, i_wt, n_evap)                       &
+!$OMP SHARED(n_evap_srce,nsurft,land_pts,n_wtrac_jls,evap_srce_frac,           &
+!$OMP        fqw_evapsrce_norm,resf_wtrac)
+  DO n_evap = 1, n_evap_srce
+    DO n = 1,nsurft
+      !$OMP DO SCHEDULE(STATIC)
+      DO l = 1,land_pts
+        evap_srce_frac(l,n,n_evap)    = 0.0
+        fqw_evapsrce_norm(l,n,n_evap) = 0.0
+        DO i_wt = 1, n_wtrac_jls
+          resf_wtrac(l,n,n_evap,i_wt) = 0.0
+        END DO
+      END DO
+      !$OMP END DO NOWAIT
+    END DO
+  END DO      
+!$OMP END PARALLEL
 
   DO n = 1,nsurft
 
@@ -2761,26 +2785,41 @@ IF (l_wtrac_jls) THEN
 
     DO i_wt = 1, n_wtrac_jls
 
-      ! Set up resistance factors which include any kinetic fractionation
+      ! Set up resistance factors (which may in the future include kinetic
+      ! fractionation - but currently the resistance factors are the same
+      ! as normal water) 
       CALL sf_resist_wtrac(i_wt, n, land_pts, surft_pts(n),                    &
                            surft_index(:,n), snowdep_surft(:,n),               &
                            resfs(:,n), dq(:,n), catch(:,n),                    &
                            evap_srce_frac(:,:,n),                              &
                            cansnowtile(n), resf_wtrac(:,:,n,i_wt))
-
-      ! Calculate surface flux
-      CALL sf_flux_land_wtrac(i_wt, land_pts, surft_pts(n),                    &
+    END DO
+      
+    ! Calculate surface fluxes for normal water for the separate
+    ! evaporative surfaces (snow, canopy, soil, lake) 
+    CALL sf_flux_land_norm(   land_pts, surft_pts(n),                          &
                               surft_index(:,n), alpha1(:,n) ,rhokh_surft(:,n), &
-                              qstar_surft(:,n),dtstar_surft(:,n),              &
-                              resf_wtrac(:,:,n,i_wt), evap_srce_frac(:,:,n),   &
-                              q_elev_wtrac(:,n,i_wt),                          &
+                              qstar_surft(:,n), tstar_surft(:,n),              &
+                              dtstar_surft(:,n),                               &
+                              resf_wtrac(:,:,n,1), evap_srce_frac(:,:,n),      &
+                              q_elev(:,n), fqw_evapsrce_norm(:,:,n))
+
+    ! Calculate surface fluxes for water tracers by 
+    ! scaling normal water fluxes with source ratio
+    DO i_wt = 1, n_wtrac_jls
+           
+       CALL sf_flux_land_nofrac_wtrac(i_wt,land_pts,surft_pts(n),              &
+                              surft_index(:,n), evap_srce_frac(:,:,n),         &
+                              q_elev(:,n),q_elev_wtrac(:,n,i_wt),              &
                               snow_surft(:,n), snow_surft_wtrac(:,n,i_wt),     &
                               smc_soilt(:,m), smc_soilt_wtrac(:,m,i_wt),       &
                               canopy(:,n), canopy_wtrac(:,n,i_wt),             &
+                              fqw_evapsrce_norm(:,:,n),                        &
                               fqw_evapsrce_wtrac(:,:,n,i_wt),                  &
                               fqw_surft_wtrac(:,n,i_wt))
+    END DO            
 
-
+    DO i_wt = 1, n_wtrac_jls
 !$OMP PARALLEL DO IF(surft_pts(n) > 1) SCHEDULE(STATIC)                        &
 !$OMP DEFAULT(NONE) PRIVATE(i, j, k, l) SHARED(surft_pts, surft_index,         &
 !$OMP    land_index, t_i_length, n, i_wt, fqw_1_wtrac, flandg, tile_frac,      &
@@ -2801,12 +2840,16 @@ IF (l_wtrac_jls) THEN
   END DO  ! surface tiles
 
   ! Carry out check on total flux for 'normal' water tracer
-  CALL sf_flux_land_check_wtrac(land_pts, nsurft, land_index, tile_frac,       &
+  IF (land_pts > 0) THEN
+    CALL sf_flux_land_check_wtrac(land_pts, nsurft, land_index, tile_frac,     &
                flandg, snowdep_surft, canopy, flake, dq, fracaero_t(:,:),      &
                resfs, resft, resf_wtrac(:,:,:,1), evap_srce_frac,              &
                fqw_surft, fqw_1, fqw_surft_wtrac(:,:,1), fqw_1_wtrac,          &
                fqw_evapsrce_wtrac(:,:,:,1))
 
+  END IF
+
+  DEALLOCATE(fqw_evapsrce_norm)
   DEALLOCATE(evap_srce_frac)
   DEALLOCATE(resf_wtrac)
 

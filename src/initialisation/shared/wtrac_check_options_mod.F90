@@ -27,6 +27,7 @@ SUBROUTINE wtrac_check_options(ERROR)
 USE jules_hydrology_mod,           ONLY: l_wetland_unfrozen, l_pdm
 USE jules_irrig_mod,               ONLY: l_irrig_dmd
 USE jules_rivers_mod,              ONLY: lake_water_conserve_method
+USE jules_science_fixes_mod,       ONLY: l_fix_neg_snow
 USE jules_sea_seaice_mod,          ONLY: l_tstar_sice_new, nice, nice_use
 USE jules_snow_mod,                ONLY: nsmax
 USE jules_soil_mod,                ONLY: l_tile_soil, l_holdwater,             &
@@ -126,7 +127,8 @@ IF (l_point_data) THEN
   "Water tracers are not compatible with point rainfall data (l_point_data=T)")
 END IF
 
-IF ( .NOT. l_tstar_sice_new ) THEN
+IF ( .NOT. l_tstar_sice_new .AND. nice == 1) THEN
+  ! Note if nice>1 then this setting is not relevant (when nice=nice_use)
   ERROR = 1
   CALL jules_print(routinename,                                                &
   "Water tracers are not presently compatible with l_tstar_sice_new=F")
@@ -136,6 +138,12 @@ IF (nice  /=  nice_use) THEN
   ERROR = 1
   CALL jules_print(routinename,                                                &
   "Water tracers require full use of sea ice categories (nice=nice_use)")
+END IF
+
+IF (.NOT. l_fix_neg_snow) THEN
+  ERROR = 1
+  CALL jules_print(routinename,                                                &
+  "Water tracers require the fix for negative snow (l_fix_neg_snow=T)")
 END IF
 
 RETURN

@@ -239,6 +239,9 @@ USE veg3_parm_mod,            ONLY: veg3_ctrl,litter_parms,red_parms
 
 USE veg3_field_mod,           ONLY: veg_state,red_state
 
+USE wtrac_checks_jls_iso_mod, ONLY: wtrac_checks_sno_iso, wtrac_checks_hyd_iso,&
+                                    wtrac_checks_grid_iso
+
 USE water_constants_mod,      ONLY: rho_water
 
 USE ereport_mod,              ONLY: ereport
@@ -1415,6 +1418,35 @@ CASE DEFAULT
   CALL ereport(RoutineName, errorstatus, jules_message)
 
 END SELECT
+
+IF (l_wtrac_jls) THEN
+
+  ! Check that the snow isotope fields
+  CALL wtrac_checks_sno_iso(land_pts, nsurft, nsmax, surft_pts,               &
+                            ainfo%surft_index, ainfo%land_index,               &
+                            progs%snow_surft, progs%snow_grnd_surft,          &
+                            progs%sice_surft,progs%sliq_surft,                &
+                            wtrac_jls%snow_surft,                             &
+                            wtrac_jls%snow_grnd_surft,                        &
+                            wtrac_jls%sice_surft,                             &
+                            wtrac_jls%sliq_surft)
+
+    CALL wtrac_checks_hyd_iso(land_pts, nsurft, nsoilt, sm_levels, soil_pts,  &
+                            ainfo%soil_index,                                 &
+                            surft_pts, ainfo%surft_index, ainfo%land_index,    &
+                            progs%canopy_surft, psparms%sthu_soilt,           &
+                           psparms%sthf_soilt, progs%smcl_soilt, sthzw_soilt, &
+                            wtrac_jls%canopy_surft,                           &
+                            wtrac_jls%sthu_soilt,                             &
+                            wtrac_jls%sthf_soilt,                             &
+                            wtrac_jls%smcl_soilt,                             &
+                            wtrac_jls%sthzw_soilt)
+
+  IF (l_rivers) THEN
+    CALL wtrac_checks_grid_iso(river_row_length, river_rows,                  &
+                           twatstor, wtrac_jls%twatstor,'twatstor')
+  END IF
+END IF
 
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_out,zhook_handle)
 RETURN

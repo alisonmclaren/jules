@@ -22,14 +22,13 @@ MODULE wtrac_correct_jls_mod
 !   Language: Fortran 90.
 !-------------------------------------------------------------------------------
 
-USE um_types, ONLY: real_jlslsm
+USE um_types,                ONLY: real_jlslsm
+USE jules_print_mgr,         ONLY: jules_message, jules_print
 
 USE jules_water_tracers_mod, ONLY: wtrac_calc_ratio_fn_jules
+USE water_tracers_set_mod,   ONLY: min_q_tiny_wt
 
 IMPLICIT NONE
-
-! Remove water tracer if water or water tracer is less than min_value
-REAL(KIND=real_jlslsm), PARAMETER :: min_value = 1.0e-20
 
 CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='WTRAC_CORRECT_JLS_MOD'
 
@@ -260,44 +259,38 @@ DO n = 1,nsurft
 
       DO ilyr = 1, nlayer
 
-        ! This check is currently not used due to negative snow values.
-        ! Once the water tracers are coded for the new option of fixing
-        ! negative snow values (i.e. l_fix_neg_snow=T), then this check
-        ! should be reinstated
-        ! IF (q(i,n,ilyr) > min_value) THEN
-        ! If there is water present, then correct water tracers
+        IF (q(i,n,ilyr) > min_q_tiny_wt) THEN
+          ! If there is water present, then correct water tracers
 
-        ! Find difference between normal water tracer and water
-        diff_q  = q(i,n,ilyr) - q_wtrac(i,n,ilyr,1)
+          ! Find difference between normal water tracer and water
+          diff_q  = q(i,n,ilyr) - q_wtrac(i,n,ilyr,1)
 
-        ! Store normal water value for ratio calculation
-        q_wtrac_norm = q_wtrac(i,n,ilyr,1)
+          ! Store normal water value for ratio calculation
+          q_wtrac_norm = q_wtrac(i,n,ilyr,1)
 
-        DO i_wt = 1, n_wtrac_jls
-          ! Calculate ratios - use the normal water tracer for this
-          ratio_q = wtrac_calc_ratio_fn_jules(i_wt, q_wtrac(i,n,ilyr,i_wt),    &
-                                              q_wtrac_norm)
+          DO i_wt = 1, n_wtrac_jls
+            ! Calculate ratios - use the normal water tracer for this
+            ratio_q = wtrac_calc_ratio_fn_jules(i_wt, q_wtrac(i,n,ilyr,i_wt),  &
+                                                q_wtrac_norm)
 
-          ! Apply correction
-          q_wtrac(i,n,ilyr,i_wt) = q_wtrac(i,n,ilyr,i_wt) + ratio_q*diff_q
+            ! Apply correction
+            q_wtrac(i,n,ilyr,i_wt) = q_wtrac(i,n,ilyr,i_wt) + ratio_q*diff_q
 
-          ! Ensure there are no very small values - ignore conservation here
-          ! as dealing with such small values
+            ! Ensure there are no very small values - ignore conservation here
+            ! as dealing with such small values
+            IF (q_wtrac(i,n,ilyr,i_wt) < min_q_tiny_wt) THEN
+               q_wtrac(i,n,ilyr,i_wt) = 0.0
+            END IF
+         END DO
 
-          ! See note above as to why this code is commented out for now.
-          !            IF (q_wtrac(i,n,ilyr,i_wt) < min_value) THEN
-          !              q_wtrac(i,n,ilyr,i_wt) = 0.0
-          !            END IF
+        ELSE
 
-        END DO
-        ! ELSE
+          ! If there is no water present, set water tracer fields to zero
+          DO i_wt = 1, n_wtrac_jls
+            q_wtrac(i,n,ilyr,i_wt) = 0.0
+          END DO
 
-        ! If there is no water present, set water tracer fields to zero
-        !          DO i_wt = 1, n_wtrac_jls
-        !            q_wtrac(i,n,ilyr,i_wt) = 0.0
-        !          END DO
-
-        !        ENDIF
+        ENDIF
 
       END DO
     END IF
@@ -360,7 +353,7 @@ DO j = 1, rows
     IF (q(i,j) /= rmdi) THEN
       ! (Note, twatstor contains rmdi values which shouldn't be corrected)
 
-      IF (q(i,j) > min_value) THEN
+      IF (q(i,j) > min_q_tiny_wt) THEN
         ! If there is water present, then correct water tracers
 
         ! Find difference between normal water tracer and water
@@ -379,8 +372,8 @@ DO j = 1, rows
 
           ! Ensure there are no very small values - ignore conservation here
           ! as dealing with such small values
-          IF (q_wtrac(i,j,i_wt) < min_value) THEN
-            q_wtrac(i,j,i_wt) = 0.0
+          IF (q_wtrac(i,j,i_wt) < min_q_tiny_wt) THEN
+             q_wtrac(i,j,i_wt) = 0.0
           END IF
 
         END DO

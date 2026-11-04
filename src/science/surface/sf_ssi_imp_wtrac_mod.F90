@@ -22,9 +22,9 @@ MODULE sf_ssi_imp_wtrac_mod
 !   b) any change in temperature caused by surface melt (sf_melt) (only
 !      applicable for sea ice).
 !
-!   Water tracers are updated here based on the assumption that the surface
-!   flux ratio of water tracer to water remains constant between the explicit
-!   and implicit schemes for each evaporative source type.
+!   The water tracer surface flux is updated by an increment which is simply
+!   the change in the normal water flux scaled by the source water tracer
+!   ratio.
 !
 ! Code Owner: Please refer to ModuleLeaders.txt
 ! This file belongs in Surface
@@ -43,13 +43,14 @@ CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='SF_SSI_IMP_WTRAC_MOD'
 
 CONTAINS
 
-SUBROUTINE sf_ssi_imp_wtrac (                                                  &
+SUBROUTINE sf_ssi_imp_wtrac (i_wt,                                             &
  ssi_pts, sea_pts, ssi_index, sea_index, std_ratio, tile_frac, fssi, fqw,      &
+ qw_1, q_sfc_ratio, qw_1_wtrac,                                                &
  fqw_wtrac, fqw_norm_wtrac, fqw_1_wtrac, dfqw_1_wtrac, e_wtrac)
 
 USE atm_fields_bounds_mod,    ONLY: tdims
 USE theta_field_sizes,        ONLY: t_i_length
-USE jules_water_tracers_mod,  ONLY: min_q_ratio
+USE jules_water_tracers_mod,  ONLY: wtrac_calc_ratio_fn_jules
 
 USE parkind1, ONLY: jprb, jpim
 USE yomhook, ONLY: lhook, dr_hook
@@ -57,7 +58,9 @@ USE yomhook, ONLY: lhook, dr_hook
 IMPLICIT NONE
 
 INTEGER, INTENT(IN) ::                                                         &
- ssi_pts                                                                       &
+ i_wt                                                                          &
+                       ! IN Water tracer number
+,ssi_pts                                                                       &
                        ! IN Total number of sea or sea-ice points
 ,sea_pts                                                                       &
                        ! IN Number of sea points.
@@ -79,12 +82,24 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
 ,fqw(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)                      &
                        ! IN Final normal water surface flux at end of implicit
                        !    scheme
+,qw_1(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)                     &
+                       ! IN Atmospheric water content
+
+,q_sfc_ratio(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)              &
+                       ! IN Water tracer ratio at surface (sea or sea ice)
+
+,qw_1_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)               &
+                       ! IN Atmospheric water tracer content
+
 ,fqw_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)                &
-                       ! IN Explicit water tracer surface flux for 'tile' (i.e.
-                       !        open ocean or sea ice category)
+                       ! IN Water tracer surface flux for 'tile'
+                       !    (i.e. open ocean or sea ice category)
+                       !    Calculated in explicit scheme
+                       
 ,fqw_norm_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)
-                       ! IN Explicit NORMAL water tracer surface flux for
+                       ! IN NORMAL water tracer surface flux for
                        !   'tile' (i.e. open ocean or sea ice category)
+                       !   Calculated in explicit scheme
 
 REAL(KIND=real_jlslsm), INTENT(IN OUT) ::                                      &
  fqw_1_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)              &
@@ -92,10 +107,12 @@ REAL(KIND=real_jlslsm), INTENT(IN OUT) ::                                      &
 ,dfqw_1_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)
                        ! IN OUT GBM increment to water tracer surface flux
 
-REAL(KIND=real_jlslsm), INTENT(OUT) ::                                         &
+REAL(KIND=real_jlslsm), INTENT(OUT) ::                                      &
  e_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)
-                       ! OUT    Water tracer evaporation for 'tile' (i.e.
+                       ! OUT Water tracer evaporation for 'tile' (i.e.
                        !        open ocean or sea ice category)
+                       ! Flux corrected for implicit correction to
+                       !       normal water flux
 
 
 ! Local variables
@@ -109,9 +126,10 @@ INTEGER ::                                                                     &
              ! Sea or sea ice field index
 
 REAL(KIND=real_jlslsm) ::                                                      &
- fqw_ratio
-             ! Ratio of water tracer flux to normal water flux from
-             ! explicit calculation
+ e_diff                                                                        &
+             ! Difference between the implicit and explicit surface flux
+,qw_atm_ratio
+             ! Water tracer ratio of the atmospheric water content
 
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
@@ -121,50 +139,34 @@ CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_SSI_IMP_WTRAC'
 
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
 
-! Initialise fields
-!$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE)                               &
-!$OMP PRIVATE(i,j)                                                             &
-!$OMP SHARED(tdims, e_wtrac)
-DO j = tdims%j_start,tdims%j_end
-  DO i = tdims%i_start,tdims%i_end
-    e_wtrac(i,j) = 0.0
-  END DO
-END DO
-!$OMP END PARALLEL DO
-
 !$OMP PARALLEL DO IF(sea_pts > 1)                                              &
 !$OMP SCHEDULE(STATIC) DEFAULT(NONE)                                           &
-!$OMP PRIVATE(l,k,i,j,fqw_ratio)                                               &
-!$OMP SHARED(sea_pts,sea_index,ssi_index,t_i_length,fqw_wtrac,fqw_norm_wtrac,  &
-!$OMP        fqw,dfqw_1_wtrac,fqw_1_wtrac,e_wtrac,tile_frac,fssi,std_ratio)
+!$OMP PRIVATE(l,k,i,j,e_diff,qw_atm_ratio)                                     &
+!$OMP SHARED(sea_pts,sea_index,ssi_index,t_i_length,fqw_1_wtrac,fqw,           &
+!$OMP        e_wtrac,tile_frac,fssi,std_ratio,dfqw_1_wtrac,                    &
+!$OMP        i_wt,qw_1,qw_1_wtrac,q_sfc_ratio,fqw_wtrac,fqw_norm_wtrac)
 DO k = 1,sea_pts
   l = sea_index(k)
   j=(ssi_index(l) - 1) / t_i_length + 1
   i = ssi_index(l) - (j-1) * t_i_length
 
-  ! Calculate ratio of the moisture fluxes for water tracers to
-  ! moisture fluxes for normal water which were calculated in the explicit
-  ! scheme.
+  ! Calculate difference between normal water evaporation (calculated in the
+  ! explicit scheme) and the final actual water evaporation field 
+  e_diff = fqw(i,j) - fqw_norm_wtrac(i,j)
 
-  IF (ABS(fqw_norm_wtrac(i,j)) > min_q_ratio) THEN
-    fqw_ratio = fqw_wtrac(i,j) / fqw_norm_wtrac(i,j)
-  ELSE
-    fqw_ratio = std_ratio
+  ! Correct water tracer flux for the additional water flux (assume no
+  ! fractionation here)  
+  IF (e_diff < 0.0) THEN
+    ! Source is the atmosphere
+    qw_atm_ratio = wtrac_calc_ratio_fn_jules(i_wt,                             &
+                                             qw_1_wtrac(i,j),qw_1(i,j))
+    e_wtrac(i,j) = fqw_wtrac(i,j) + qw_atm_ratio * e_diff
+
+  ELSE IF (e_diff > 0.0) THEN
+    ! Source is the sea or sea ice
+    e_wtrac(i,j) = fqw_wtrac(i,j) + q_sfc_ratio(i,j) * e_diff
+
   END IF
-
-  ! Update explicit fluxes to account for the normal water flux changing
-  ! in the implicit scheme.
-  !
-  ! Assumption here is that the ratio of isotopic evaporative fluxes to normal
-  ! water evaporative fluxes remains UNCHANGED.
-  !
-  ! This is new_wtrac_flux = old_wtrac_flux
-  !                           + ratio * (new_water_flux - old_water_flux)
-  ! where ratio = old_wtrac_flux/old_water_flux
-  !
-  ! which can be simplified to new_wtrac_flux = ratio * new_water_flux
-
-  e_wtrac(i,j) = fqw_ratio * fqw(i,j)
 
   ! Add new flux to GBM fields
   ! (where tile_frac = leads fraction for ocean call
@@ -182,4 +184,5 @@ IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_out,zhook_handle)
 
 RETURN
 END SUBROUTINE sf_ssi_imp_wtrac
+
 END MODULE sf_ssi_imp_wtrac_mod

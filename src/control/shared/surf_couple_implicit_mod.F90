@@ -433,12 +433,13 @@ CASE ( jules )
         )
 
   IF ( .NOT. l_correct ) THEN
+
     CALL jules_land_sf_implicit (                                              &
     ! IN values defining field dimensions and subset to be processed :
             land_pts,ainfo%land_index,nsurft,ainfo%surft_index,surft_pts,      &
             sm_levels,                                                         &
-            canhc_surft,progs%canopy_surft,flake,progs%smc_soilt,tile_frac,    &
-            wt_ext_surft,coast%fland,flandg,                                   &
+            canhc_surft,progs%canopy_surft,flake,                              &
+            progs%smc_soilt,tile_frac, wt_ext_surft,coast%fland,flandg,        &
     !IN values defining water tracer field dimensions
             n_wtrac_jls, n_evap_srce,                                          &
     ! IN everything not covered so far :
@@ -447,6 +448,7 @@ CASE ( jules )
             jules_vars%dtrdz_charney_grid_1_ij,fracaero_t,fracaero_s,          &
             resfs,resft, rhokh_surft,                                          &
             fluxes%emis_surft,progs%snow_surft,dtstar_surft,                   &
+            forcing%qw_1_ij,                                                   &
     ! INOUT data :
             progs%tstar_surft,fluxes%fqw_surft,fqw_1,ftl_1,fluxes%ftl_surft,   &
             sf_diag,                                                           &
@@ -480,6 +482,7 @@ CASE ( jules )
             !Water tracers (IN)
             wtrac_jls%snow_surft, wtrac_jls%smc_soilt,                         &
             wtrac_jls%canopy_surft, wtrac_jls%fqw_evapsrce,                    &
+            wtrac_jls%qw_1_ij,                                                 &
             !Water tracers (INOUT)
             wtrac_jls%fqw_surft,                                               &
             !Water tracers (OUT)
@@ -494,14 +497,15 @@ CASE ( jules )
   CALL jules_ssi_sf_implicit (                                                 &
   ! IN values defining field dimensions and subset to be processed :
           nice,nice_use,flandg,                                                &
-  !IN values defining water tracer field dimensions
-            n_wtrac_jls,                                                       &
+  ! IN values defining water tracer field dimensions
+          n_wtrac_jls,                                                         &
   ! IN sea/sea-ice data :
           ainfo%ice_fract_ij,ainfo%ice_fract_ncat_sicat,ice_fract_cat_use,     &
           progs%k_sice_sicat,progs%di_ncat_sicat,ainfo%sstfrz_ij,              &
   ! IN everything not covered so far :
           forcing%lw_down_ij,r_gamma,alpha1_sice,ashtf,                        &
           jules_vars%dtrdz_charney_grid_1_ij,rhokh_sice,l_correct,             &
+          forcing%qw_1_ij,                                                     &
   ! INOUT data :
           fluxes%fqw_sicat,fluxes%ftl_sicat,coast%tstar_sice_sicat,            &
           coast%tstar_ssi_ij,                                                  &
@@ -524,6 +528,7 @@ CASE ( jules )
           fluxes%sw_sicat,                                                     &
   ! water tracers (IN)
           wtrac_jls%fqw_sea, wtrac_jls%fqw_sicat,                              &
+          wtrac_jls%r_sea, wtrac_jls%r_sice, wtrac_jls%qw_1_ij,                &
   ! water tracers (INOUT)
           wtrac_jls%fqw_1, wtrac_jls%dfqw_imp,                                 &
   ! water tracers (OUT)

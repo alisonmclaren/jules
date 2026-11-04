@@ -37,9 +37,11 @@ IMPLICIT NONE
 !           relative diff of max diff > max_rel_diff_warning
 ! Abort run if relative diff > max_rel_diff_abort
 
-REAL(KIND=real_jlslsm), PARAMETER :: max_diff_warning = 1.0e-15
-REAL(KIND=real_jlslsm), PARAMETER :: max_rel_diff_warning = 1.0e-13
-REAL(KIND=real_jlslsm), PARAMETER :: max_rel_diff_abort   = 1.0e-12
+REAL(KIND=real_jlslsm), PARAMETER :: max_diff_warning     = 1.0e-14
+REAL(KIND=real_jlslsm), PARAMETER :: max_rel_diff_warning = 1.0e-10
+REAL(KIND=real_jlslsm), PARAMETER :: max_diff_abort       = 1.0e-09
+REAL(KIND=real_jlslsm), PARAMETER :: max_rel_diff_abort   = 1.0e-08
+
 
 CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='WTRAC_CHECKS_JLS_MOD'
 
@@ -252,6 +254,7 @@ INTEGER :: ErrorStatus        ! Error code
 REAL(KIND=real_jlslsm) :: diff_q
 REAL(KIND=real_jlslsm) :: largest_error_q
 REAL(KIND=real_jlslsm) :: q_error
+REAL(KIND=real_jlslsm) :: rel_error
 
 CHARACTER(LEN=256) :: message
 
@@ -265,6 +268,8 @@ CHARACTER(LEN=*), PARAMETER :: RoutineName='WTRAC_CHECKS_TILES'
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
 
 largest_error_q   = 0.0
+rel_error = 0.0
+q_error = 0.0
 
 ! --------------------------------------------------------------------------
 ! Find largest error
@@ -282,9 +287,13 @@ DO n = 1,nsurft
           IF (ABS(q(i,n,ilyr)) > 0.0) THEN
             largest_error_q = diff_q
             q_error         = q(i,n,ilyr)
-          ELSE
-            largest_error_q = diff_q
-            q_error         = q_wtrac(i,n,ilyr)
+            rel_error       = diff_q / q_error
+
+! Don't do this as if q=0, and set q_error = q_wtrac, then rel error is 1
+! which isn't useful.
+!          ELSE
+!            largest_error_q = diff_q
+!            q_error         = q_wtrac(i,n,ilyr)
           END IF
           nmax_q = n
           kmax_q = k
@@ -301,7 +310,7 @@ END DO
 ! --------------------------------------------------------------------------
 
 IF (ABS(largest_error_q) > max_diff_warning .AND.                              &
-    ABS(largest_error_q/q_error) > max_rel_diff_warning) THEN
+    ABS(rel_error) > max_rel_diff_warning) THEN
 
   IF (nlayer > 1) THEN
     ilyrmax_q_out = ilyrmax_q
@@ -317,13 +326,14 @@ IF (ABS(largest_error_q) > max_diff_warning .AND.                              &
   newline//                                                                    &
   ' q, q_wtrac, max diff, frac diff = ' //newline,                             &
   q(imax_q,nmax_q,ilyrmax_q),q_wtrac(imax_q,nmax_q,ilyrmax_q),                 &
-  largest_error_q, largest_error_q/q_error,                                    &
+  largest_error_q, rel_error,                                                  &
   newline// ' at n,i,k,layer,it=', nmax_q,imax_q,kmax_q,ilyrmax_q_out,         &
   timestep_number
 
   CALL jules_print(RoutineName, jules_message)
 
-  IF (ABS(largest_error_q/q_error) > max_rel_diff_abort) THEN
+  IF (ABS(largest_error_q) > max_diff_abort .AND.                              &
+      ABS(rel_error) > max_rel_diff_abort) THEN
     ! Abort model
     ErrorStatus = 100
     message = 'Problem with water tracers in JULES.'

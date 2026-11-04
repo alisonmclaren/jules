@@ -36,7 +36,7 @@ SUBROUTINE jules_ssi_sf_implicit (                                             &
  ice_fract,ice_fract_ncat,ice_fract_cat_use,k_sice,di_ncat,sstfrz,             &
 ! IN everything not covered so far :
  lw_down,r_gamma,alpha1_sice,ashtf_prime,                                      &
- dtrdz_charney_grid_1,rhokh_sice,l_correct,                                    &
+ dtrdz_charney_grid_1,rhokh_sice,l_correct,qw_1,                               &
 ! INOUT data :
  fqw_ice,ftl_ice,                                                              &
  tstar_sice_cat,tstar_ssi,tstar_sea,                                           &
@@ -56,6 +56,7 @@ SUBROUTINE jules_ssi_sf_implicit (                                             &
  sw_sicat,                                                                     &
  ! water tracers (IN)
  fqw_sea_wtrac, fqw_sicat_wtrac,                                               &
+ r_sea_wtrac, r_sice_wtrac, qw_1_wtrac,                                        &
  ! water tracers (IN OUT)
  fqw_1_wtrac, dfqw_wtrac,                                                      &
  ! water tracers (OUT)
@@ -100,6 +101,7 @@ USE yomhook,                  ONLY:                                            &
   lhook, dr_hook
 
 USE jules_science_fixes_mod,  ONLY: l_fix_lake_ice_temperatures
+
 
 IMPLICIT NONE
 !--------------------------------------------------------------------
@@ -168,10 +170,11 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
                       pdims%j_start:pdims%j_end)                               &
                              ! IN -g.dt/dp for model layers.
 ,rhokh_sice(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end,               &
-                                                        nice_use)
+                                                        nice_use)              &
                              ! IN Surface exchange coefficients
                              !    for sea-ice
-
+,qw_1(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)
+                             ! IN Atmospheric water content
 LOGICAL, INTENT(IN) ::                                                         &
  l_correct                   ! IN flag used by the new BL solver
 
@@ -308,6 +311,19 @@ REAL(KIND=real_jlslsm), INTENT(IN) :: fqw_sicat_wtrac(                         &
                                                nice_use, n_wtrac_jls)
                             ! Water tracer surface flux over sea ice
                             !  from explicit scheme per ice cat (kg/m2/s)
+REAL(KIND=real_jlslsm), INTENT(IN) :: qw_1_wtrac(tdims%i_start:tdims%i_end,    &
+                                                 tdims%j_start:tdims%j_end,    &
+                                                 n_wtrac_jls)
+                            ! Water tracer atmospheric water content
+REAL(KIND=real_jlslsm), INTENT(IN) :: r_sea_wtrac(tdims%i_start:tdims%i_end,   &
+                                                  tdims%j_start:tdims%j_end,   &
+                                                  n_wtrac_jls)
+                            ! Water tracer sea surface ratio
+REAL(KIND=real_jlslsm), INTENT(IN) :: r_sice_wtrac(tdims%i_start:tdims%i_end,  &
+                                                   tdims%j_start:tdims%j_end,  &
+                                                   nice_use,n_wtrac_jls)
+                            ! Water tracer seaice surface ratio
+
 ! Water tracers (INOUT)
 REAL(KIND=real_jlslsm), INTENT(IN OUT) :: fqw_1_wtrac(                         &
                                          tdims%i_start:tdims%i_end,            &
@@ -331,6 +347,7 @@ REAL(KIND=real_jlslsm), INTENT(OUT) :: ei_sice_wtrac(                          &
                                             nice_use,n_wtrac_jls)
                             ! Water tracer sublimation from sea ice per
                             !   ice category (kg/m2/s)
+
 
 !--------------------------------------------------------------------
 !  Workspace :-
@@ -399,6 +416,7 @@ LOGICAL ::                                                                     &
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
 REAL(KIND=jprb)               :: zhook_handle
+
 
 CHARACTER(LEN=*), PARAMETER :: RoutineName='JULES_SSI_SF_IMPLICIT'
 
@@ -682,7 +700,7 @@ IF ( .NOT. l_correct ) THEN
       END IF
 
     END DO
-
+    
   ELSE ! Use old code
 
     DO n = 1,nice
@@ -762,20 +780,24 @@ IF ( .NOT. l_correct ) THEN
       END DO
 !$OMP END PARALLEL DO
 
+      ! Add increment to water tracer surface fluxes to keep them consistent
+      ! with implicitly calculate normal water fluxes
       ! Ocean
-      CALL sf_ssi_imp_wtrac(                                                   &
+      CALL sf_ssi_imp_wtrac(i_wt,                                              &
         ssi_pts, sea_pts, ssi_index, sea_index,                                &
-        standard_ratio_wtrac(i_wt), sea_frac, fssi_ij,  e_sea,                 &
+        standard_ratio_wtrac(i_wt), sea_frac, fssi_ij,  e_sea, qw_1,           &
+        r_sea_wtrac(:,:,i_wt), qw_1_wtrac(:,:,i_wt),                           &
         fqw_sea_wtrac(:,:,i_wt), fqw_sea_wtrac(:,:,1),                         &
         fqw_1_wtrac(:,:,i_wt), dfqw_wtrac(:,:,i_wt),                           &
         e_sea_wtrac(:,:,i_wt))
 
       ! Sea ice
       DO n = 1, nice
-        CALL sf_ssi_imp_wtrac(                                                 &
+        CALL sf_ssi_imp_wtrac(i_wt,                                            &
           ssi_pts, sice_pts_ncat(n), ssi_index, sice_index_ncat(:,n),          &
           standard_ratio_wtrac(i_wt), sice_frac_ncat(:,n), fssi_ij,            &
-          fqw_ice(:,:,n),                                                      &
+          fqw_ice(:,:,n), qw_1,                                                &
+          r_sice_wtrac(:,:,n,i_wt), qw_1_wtrac(:,:,i_wt),                      &
           fqw_sicat_wtrac(:,:,n,i_wt), fqw_sicat_wtrac(:,:,n,1),               &
           fqw_1_wtrac(:,:,i_wt), dfqw_wtrac(:,:,i_wt),                         &
           ei_sice_wtrac(:,:,n,i_wt))
@@ -783,6 +805,7 @@ IF ( .NOT. l_correct ) THEN
 
     END DO   ! i_wt
     DEALLOCATE(sea_frac)
+
   END IF  ! l_wtrac_imp_jls
 
 !$OMP PARALLEL                                                                 &

@@ -1,5 +1,5 @@
 !******************************COPYRIGHT****************************************
-! (c) British Antarctic Survey and University of Bristol, 2023.
+! (c) British Antarctic Survey, 2025.
 ! All rights reserved.
 !
 ! This routine has been licensed to the other JULES partners for use and
@@ -9,20 +9,20 @@
 ! [Met Office Ref SC0237]
 !******************************COPYRIGHT****************************************
 
-MODULE sf_flux_land_wtrac_mod
+MODULE sf_flux_land_norm_mod
 
 !-----------------------------------------------------------------------------
 ! Description:
-!   Calculate water tracer surface fluxes over land.
+!   Calculate water surface fluxes over land for use by water tracers.
 !
-!   Unlike normal water, these are calculated separately for the four
-!   different evaporative sources:
+!   Water tracers require surface fluxes to be calculated separately for the
+!   four different evaporative sources:
 !   snow, canopy intercepted water, bare soil/transpiration from veg and
 !   open water (i.e. lakes).
 !
 !   This is necessary due to evaporative sources having different water
-!   tracer concentrations and different kinetic fractionation factors (for
-!   isotopes).
+!   tracer concentrations.  (And potentially different kinetic fractionation
+!   factors for isotopes, although currently no fractionation is included.)
 !
 !   The module also contains a subroutine to check the calculated fluxes
 !   against the water fluxes.
@@ -45,30 +45,23 @@ IMPLICIT NONE
 REAL(KIND=real_jlslsm), PARAMETER :: max_diff_warning = 1.0e-16
 REAL(KIND=real_jlslsm), PARAMETER :: max_diff_abort   = 1.0e-12
 
-CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='SF_FLUX_LAND_WTRAC_MOD'
+CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='SF_FLUX_LAND_NORM_MOD'
 
 CONTAINS
 
-SUBROUTINE sf_flux_land_wtrac (i_wt,                                           &
+SUBROUTINE sf_flux_land_norm (                                                 &
  land_pts, surft_pts, surft_index, alpha1, rhokh_1, qstar,                     &
- dtstar, resf_wtrac, evap_srce_frac, q_elev_wtrac,                             &
- snow_surft, snow_surft_wtrac, smc_soilt, smc_soilt_wtrac,                     &
- canopy, canopy_wtrac, fqw_evapsrce_wtrac, fqw_1_wtrac)
+ tstar, dtstar, resf_wtrac, evap_srce_frac, q_elev, fqw_evapsrce)
 
-USE jules_water_tracers_mod, ONLY: n_evap_srce, wtrac_lake_fixed_ratio,        &
-                                    evap_srce_snow, evap_srce_cano,            &
-                                    evap_srce_soil, evap_srce_lake,            &
-                                    wtrac_calc_ratio_fn_jules
-
+USE jules_water_tracers_mod, ONLY: n_evap_srce
+                                    
 USE parkind1, ONLY: jprb, jpim
 USE yomhook,  ONLY: lhook, dr_hook
 
 IMPLICIT NONE
 
 INTEGER, INTENT(IN) ::                                                         &
- i_wt                                                                          &
-                       ! IN Water tracer index
-,land_pts                                                                      &
+ land_pts                                                                      &
                        ! IN Total number of land points.
 ,surft_pts                                                                     &
                        ! IN Number of tile points.
@@ -84,36 +77,24 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
                        ! IN Surface exchange coefficients for land tiles
 ,qstar(land_pts)                                                               &
                        ! IN Surface saturated specific humidity
+,tstar(land_pts)                                                               &
+                       ! IN Surface temperature
 ,dtstar(land_pts)                                                              &
                        ! IN Change in TSTAR over timestep for land tiles
 ,resf_wtrac(land_pts,n_evap_srce)                                              &
                        ! IN Resitance factor for water tracers for individual
                        !     evaporative source types
+                       !     The normal water tracer values are used here
 ,evap_srce_frac(land_pts,n_evap_srce)                                          &
                        ! IN Evaporative source fractional contribution to
                        !    total evaporation from tile
-,q_elev_wtrac(land_pts)                                                        &
-                       ! IN Water tracer specific humidity at elevated
-                       !    height
-,snow_surft(land_pts)                                                          &
-                       ! IN Lying snow
-,snow_surft_wtrac(land_pts)                                                    &
-                       ! IN Water tracer content of lying snow
-,smc_soilt(land_pts)                                                           &
-                       ! IN Available water content in soil layers
-,smc_soilt_wtrac(land_pts)                                                     &
-                       ! IN Available water tracer content in soil layers
-,canopy(land_pts)                                                              &
-                       ! IN Surface/canopy water for snow-free land tiles
-,canopy_wtrac(land_pts)
-                       ! IN Water tracer content in canopy
+,q_elev(land_pts)
+                       ! IN Specific humidity at elevated height
 
 REAL(KIND=real_jlslsm), INTENT(IN OUT) ::                                      &
- fqw_evapsrce_wtrac(land_pts,n_evap_srce)                                      &
-                       ! IN OUT Water tracer surface flux per evaporative
+ fqw_evapsrce(land_pts,n_evap_srce)
+                       ! IN OUT Water surface flux per evaporative
                        !        source
-,fqw_1_wtrac(land_pts)
-                       ! IN OUT Water tracer surface flux per tile
 
 ! Local variables
 
@@ -126,102 +107,42 @@ INTEGER ::                                                                     &
              ! Loop counter for evaporative sources
 
 REAL(KIND=real_jlslsm) ::                                                      &
- eqm_factor                                                                    &
-             ! Equilibrium fractionation factor
-,r_wtrac                                                                       &
-             ! Ratio of water tracer to water for evaporative source
-,alpha1_wtrac                                                                  &
-             !  d(qsat for water tracers) / dT
-,epot
+ epot
              ! Potential evaporation for water tracers
 
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
 REAL(KIND=jprb)               :: zhook_handle
 
-CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_FLUX_LAND_WTRAC'
+CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_FLUX_LAND_NORM'
 
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
 
 !$OMP PARALLEL DO IF(surft_pts > 1)                                            &
 !$OMP SCHEDULE(STATIC)                                                         &
 !$OMP DEFAULT(NONE)                                                            &
-!$OMP PRIVATE(l,k,n_evap,eqm_factor,r_wtrac,alpha1_wtrac,epot)                 &
-!$OMP SHARED(surft_pts,surft_index,i_wt,snow_surft_wtrac,snow_surft,           &
-!$OMP        smc_soilt_wtrac,smc_soilt,canopy_wtrac,canopy,alpha1,             &
-!$OMP        rhokh_1,qstar,q_elev_wtrac,resf_wtrac,fqw_evapsrce_wtrac,         &
-!$OMP        dtstar,fqw_1_wtrac,evap_srce_frac,wtrac_lake_fixed_ratio)
+!$OMP PRIVATE(l,k,n_evap,epot)                                                 &
+!$OMP SHARED(tstar,surft_pts,surft_index,alpha1,rhokh_1,qstar,q_elev,          &
+!$OMP        resf_wtrac,fqw_evapsrce,dtstar,evap_srce_frac)
 DO k = 1,surft_pts
   l = surft_index(k)
 
   DO n_evap = 1, n_evap_srce
-    SELECT CASE(n_evap)
-
-    CASE (evap_srce_snow)
-      ! Snow sublimation
-
-      ! Set isotopic equilibrium fractionation factor
-      ! (Temporarily set to 1 until isotopes are coded)
-      eqm_factor = 1.0
-
-      ! Set ratio of water tracer to water for source
-      r_wtrac = wtrac_calc_ratio_fn_jules(i_wt,snow_surft_wtrac(l),            &
-                                               snow_surft(l))
-
-    CASE (evap_srce_soil)
-      ! Soil evapotranspiration
-
-      ! Set isotopic equilibrium fractionation factor
-      ! (Temporarily set to 1 until isotopes are coded)
-      eqm_factor = 1.0
-
-      ! Set ratio of water tracer to water for source
-      r_wtrac = wtrac_calc_ratio_fn_jules(i_wt,smc_soilt_wtrac(l),smc_soilt(l))
-
-    CASE (evap_srce_cano)
-      ! Canopy intercepted water evaporation
-
-      ! Set isotopic equilibrium fractionation factor
-      ! (Temporarily set to 1 until isotopes are coded)
-      eqm_factor = 1.0
-
-      ! Set ratio of water tracer to water for source
-      r_wtrac = wtrac_calc_ratio_fn_jules(i_wt, canopy_wtrac(l), canopy(l))
-
-
-    CASE (evap_srce_lake)
-      ! Lake evaporation
-
-      ! Set isotopic equilibrium fractionation factor
-      ! (Temporarily set to 1 until isotopes are coded)
-      eqm_factor = 1.0
-
-      ! Set ratio of water tracer to water for source
-      r_wtrac = wtrac_lake_fixed_ratio(i_wt)
-
-    END SELECT
-
-    ! Calculate water tracer equivalent to alpha1
-    alpha1_wtrac = (r_wtrac/eqm_factor) * alpha1(l)
 
     ! Calculate evaporation potential
-    epot = rhokh_1(l) *                                                        &
-             ( (r_wtrac/eqm_factor) * qstar(l) - q_elev_wtrac(l) )
+    epot = rhokh_1(l) * ( qstar(l) - q_elev(l) )
 
-    ! Calculate explicit water tracer surface flux
-    fqw_evapsrce_wtrac(l,n_evap) = resf_wtrac(l,n_evap) * epot
+    ! Calculate explicit water surface flux
+    fqw_evapsrce(l,n_evap) = resf_wtrac(l,n_evap) * epot
 
     ! Correction to surface flux due to change in surface temperature
-    fqw_evapsrce_wtrac(l,n_evap) =  fqw_evapsrce_wtrac(l,n_evap)               &
-                                    + resf_wtrac(l,n_evap)                     &
-                                      * rhokh_1(l) * alpha1_wtrac * dtstar(l)
+    fqw_evapsrce(l,n_evap) =  fqw_evapsrce(l,n_evap)                           &
+                              + resf_wtrac(l,n_evap)                           &
+                                      * rhokh_1(l) * alpha1(l) * dtstar(l)
 
     ! Scale surface flux by evaporative source fraction to get tile mean value
-    fqw_evapsrce_wtrac(l,n_evap) =  fqw_evapsrce_wtrac(l,n_evap)               &
+    fqw_evapsrce(l,n_evap) =  fqw_evapsrce(l,n_evap)                           &
                                         * evap_srce_frac(l,n_evap)
-
-    ! Calculate total tile flux
-    fqw_1_wtrac(l) = fqw_1_wtrac(l) + fqw_evapsrce_wtrac(l,n_evap)
 
   END DO  ! evaporation sources
 
@@ -231,7 +152,7 @@ END DO  ! tile points
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_out,zhook_handle)
 
 RETURN
-END SUBROUTINE sf_flux_land_wtrac
+END SUBROUTINE sf_flux_land_norm
 
 !-----------------------------------------------------------------------------
 
@@ -245,7 +166,7 @@ SUBROUTINE sf_flux_land_check_wtrac (                                          &
 ! Description:
 !   Compare the 'normal' water tracer explicit surface flux with the
 !   calculated water flux.  If the differences are large, then either
-!   write a warning or abort model.
+!   write a warning or abort model depending on size of error.
 !-----------------------------------------------------------------------------
 
 USE atm_fields_bounds_mod, ONLY: tdims
@@ -430,4 +351,4 @@ RETURN
 
 END SUBROUTINE sf_flux_land_check_wtrac
 
-END MODULE sf_flux_land_wtrac_mod
+END MODULE sf_flux_land_norm_mod

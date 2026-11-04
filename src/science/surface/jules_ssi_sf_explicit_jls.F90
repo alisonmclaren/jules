@@ -26,7 +26,7 @@ CONTAINS
 !
 !---------------------------------------------------------------------
 !    Arguments :-
-SUBROUTINE jules_ssi_sf_explicit (                                             &
+SUBROUTINE jules_ssi_sf_explicit (                                            &
 ! IN values defining field dimensions and subset to be processed :
  nice, nice_use, n_wtrac_jls,                                                  &
 ! IN parameters required from boundary-layer scheme :
@@ -116,6 +116,7 @@ USE parkind1, ONLY: jprb, jpim
 USE yomhook, ONLY: lhook, dr_hook
 
 IMPLICIT NONE
+
 !-----------------------------------------------------------------------
 !  Inputs :-
 !-----------------------------------------------------------------------
@@ -734,7 +735,8 @@ END IF
 !$OMP        sea_pts, sea_index, sw_sea, emis_sea, tstar_sea,                  &
 !$OMP        z1_tq_sea,z1_tq,z1_tq_ctile,flandg,z_land,l_ctile,                &
 !$OMP        ctile_orog_fix,z1_tq_top_sea,z1_tq_top,z1_tq_top_ctile,           &
-!$OMP        i_modiscopt,n_wtrac_jls,fqw_sea_wtrac,fqw_sicat_wtrac,l_wtrac_jls)
+!$OMP        i_modiscopt,n_wtrac_jls,fqw_sea_wtrac,fqw_sicat_wtrac,            &
+!$OMP        l_wtrac_jls)
 !$OMP DO SCHEDULE(STATIC)
 DO i = 1,t_i_length * t_j_length
   array_zero(i)     = 0.0
@@ -1808,7 +1810,8 @@ IF (nice_use > 1) THEN
       CALL sf_flux_ssi_wtrac (i_wt, ssi_pts, sea_pts, sea_index,               &
                               sea_point,  seasalinityfactor,                   &
                               alpha1_sea, rhokh_sea, qstar_sea,                &
-                              dtstar_sea, array_one * beta_evap,               &
+                              tstar_sea, dtstar_sea, array_one * beta_evap,    &
+                              v_s_sea, z1_tq,                                  &
                               r_sea_wtrac(:,:,i_wt), 'sea',                    &
                               qw_1_wtrac(:,:,i_wt), fqw_sea_wtrac(:,:,i_wt))
     END DO
@@ -1850,12 +1853,15 @@ ELSE
   ! Calculate water tracers open sea surface flux
   ! (Note, the only difference in this call to the one for nice_use > 1 is
   !  the use of rhokh_1_sice instead of rhokh_sea.)
+
   IF (l_wtrac_jls) THEN
+
     DO i_wt = 1, n_wtrac_jls
       CALL sf_flux_ssi_wtrac (i_wt, ssi_pts, sea_pts, sea_index,               &
                               sea_point,  seasalinityfactor,                   &
                               alpha1_sea, rhokh_1_sice, qstar_sea,             &
-                              dtstar_sea, array_one * beta_evap,               &
+                              tstar_sea, dtstar_sea, array_one * beta_evap,    &
+                              v_s_sea, z1_tq,                                  &
                               r_sea_wtrac(:,:,i_wt), 'sea',                    &
                               qw_1_wtrac(:,:,i_wt), fqw_sea_wtrac(:,:,i_wt))
     END DO
@@ -1934,11 +1940,12 @@ IF (nice_use >  1) THEN
     DO i_wt = 1, n_wtrac_jls
       DO n = 1, nice_use
         ! (Note, the '1.0' in the call is the seasalinityfactor argument)
-        CALL sf_flux_ssi_wtrac (i_wt, ssi_pts, sice_pts_ncat(n),               &
+        CALL sf_flux_ssi_wtrac(i_wt, ssi_pts, sice_pts_ncat(n),                &
                               sice_index_ncat(:,n), sea_point,  1.0,           &
                               alpha1_sice(:,:,n), rhokh_1_sice_ncats(:,:,n),   &
-                              qstar_ice_cat(:,:,n),                            &
+                              qstar_ice_cat(:,:,n), tstar_sice_cat(:,:,n),     &
                               dtstar_sice(:,:,n), array_one,                   &
+                              v_s_ice(:,:,n), z1_tq,                           &
                               r_sice_wtrac(:,:,n,i_wt), 'ice',                 &
                               qw_1_wtrac(:,:,i_wt),                            &
                               fqw_sicat_wtrac(:,:,n,i_wt))
@@ -1965,12 +1972,14 @@ ELSE
   ! Water tracers sea ice surface flux
   IF (l_wtrac_jls) THEN
     DO i_wt = 1, n_wtrac_jls
+
       ! (Note, the '1.0' in the call is the seasalinityfactor argument)
       CALL sf_flux_ssi_wtrac (i_wt, ssi_pts, sice_pts_ncat(1),                 &
                               sice_index_ncat(:,1), sea_point,  1.0,           &
                               alpha1_sice(:,:,1), rhokh_1_sice_ncats(:,:,1),   &
-                              qstar_ice,                                       &
+                              qstar_ice, tstar_sice_cat(:,:,1),                &
                               dtstar_sice(:,:,1), array_one,                   &
+                              v_s_ice(:,:,1), z1_tq,                           &
                               r_sice_wtrac(:,:,1,i_wt), 'ice',                 &
                               qw_1_wtrac(:,:,i_wt),                            &
                               fqw_sicat_wtrac(:,:,1,i_wt))
@@ -1993,6 +2002,7 @@ DO n = 1, nice_use
                  fssi_ij(i,j) * sice_frac_ncat(l,n) * ftl_ice(i,j,n)
     fqw_1(i,j) = fqw_1(i,j) +                                                  &
                  fssi_ij(i,j) * sice_frac_ncat(l,n) * fqw_ice(i,j,n)
+
   END DO
 !$OMP END PARALLEL DO
 END DO

@@ -38,7 +38,7 @@ SUBROUTINE jules_land_sf_implicit (                                            &
 ! IN everything not covered so far :
  lw_down,sw_surft,sky,t_soil_soilt,r_gamma,alpha1,ashtf_prime_surft,           &
  dtrdz_charney_grid_1,fracaero_t,fracaero_s,resfs,resft,rhokh_surft,           &
- emis_surft,snow_surft,dtstar_surft,                                           &
+ emis_surft,snow_surft,dtstar_surft,qw_1,                                      &
 ! INOUT data :
  tstar_surft,fqw_surft,fqw_1,ftl_1,ftl_surft,sf_diag,                          &
 ! OUT Diagnostic not requiring STASH flags :
@@ -66,6 +66,7 @@ SUBROUTINE jules_land_sf_implicit (                                            &
  crop_vars,                                                                    &
  ! Water tracers (IN)
  snow_surft_wtrac, smc_soilt_wtrac, canopy_wtrac, fqw_evapsrce_wtrac,          &
+ qw_1_wtrac,                                                                   &
  ! Water tracers (INOUT)
  fqw_surft_wtrac,                                                              &
  ! Water tracers (OUT)
@@ -107,8 +108,8 @@ USE water_constants_mod,      ONLY: lc, lf, rho_ice
 
 USE solinc_data,              ONLY: l_skyview
 
-USE jules_water_tracers_mod,  ONLY: l_wtrac_imp_jls, standard_ratio_wtrac
-USE sf_land_imp_wtrac_mod,    ONLY: sf_land_imp_wtrac
+USE jules_water_tracers_mod,  ONLY: l_wtrac_imp_jls
+USE sf_land_imp_nofrac_wtrac_mod, ONLY: sf_land_imp_nofrac_wtrac
 
 USE parkind1,                 ONLY: jprb, jpim
 USE yomhook,                  ONLY: lhook, dr_hook
@@ -117,6 +118,7 @@ USE jules_print_mgr,          ONLY: jules_message, jules_print
 
 
 IMPLICIT NONE
+
 !--------------------------------------------------------------------
 !  Inputs :-
 ! (a) Defining horizontal grid and subset thereof to be processed.
@@ -173,9 +175,11 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
                              ! IN Emissivity for land tiles
 ,snow_surft(land_pts,nsurft)                                                   &
                              ! IN Lying snow on tiles (kg/m2)
-,dtstar_surft(land_pts,nsurft)
+,dtstar_surft(land_pts,nsurft)                                                 &
                              ! IN Change in TSTAR over timestep
                              !    for land tiles
+,qw_1(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)
+                             ! IN Total water content
 
 ! (f) Atmospheric + any other data not covered so far, incl control.
 
@@ -244,7 +248,10 @@ REAL(KIND=real_jlslsm), INTENT(IN) :: fqw_evapsrce_wtrac(land_pts,             &
                                                n_evap_srce,nsurft,n_wtrac_jls)
                              ! Water tracer surface FQW for each
                              !     evap source for land tiles (kg/m2/s)
-
+REAL(KIND=real_jlslsm), INTENT(IN) :: qw_1_wtrac(tdims%i_start:tdims%i_end,    &
+                                       tdims%j_start:tdims%j_end,n_wtrac_jls)
+                             ! IN Total water tracer content in lowest atmos
+                             !    layer
 
 !--------------------------------------------------------------------
 !  In/outs :-
@@ -279,7 +286,6 @@ REAL(KIND=real_jlslsm), INTENT(IN OUT) :: fqw_surft_wtrac(land_pts,nsurft,     &
 !--------------------------------------------------------------------
 !  Outputs :-
 !-1 Diagnostic (or effectively so - includes coupled model requisites):-
-
 !  (a) Calculated anyway (use STASH space from higher level) :-
 !--------------------------------------------------------------------
 REAL(KIND=real_jlslsm), INTENT(OUT) ::                                         &
@@ -422,6 +428,7 @@ REAL(KIND=real_jlslsm) ::                                                      &
 ,snowinc_flake(land_pts,nsurft)
                              ! Increment to ice for FLake
 
+! **MAKE allocatable?
 REAL(KIND=real_jlslsm) ::                                                      &
  elake_surft_wtrac(land_pts,nsurft,n_wtrac_jls)
                              ! Lake evaporation on land tiles
@@ -926,15 +933,17 @@ END IF
 !--------------------------------------------------------------------------
 
 IF (l_wtrac_imp_jls) THEN
+   
   DO i_wt = 1, n_wtrac_jls
-    CALL sf_land_imp_wtrac(                                                    &
-      land_pts, nsurft, sm_levels, n_evap_srce,                                &
+
+    CALL sf_land_imp_nofrac_wtrac(                                             &
+      i_wt, land_pts, nsurft, sm_levels, n_evap_srce,                          &
       surft_pts, land_index, surft_index, timestep,                            &
-      standard_ratio_wtrac(i_wt), flandg, tile_frac, non_lake_frac,            &
+      flandg, tile_frac, non_lake_frac,                                        &
+      snow_surft, smc_soilt, canopy, qw_1,                                     &
       snow_surft_wtrac(:,:,i_wt), smc_soilt_wtrac(:,:,i_wt),                   &
-      canopy_wtrac(:,:,i_wt), wt_ext_surft,                                    &
-      ei_surft, esoil_surft, ecan_surft, elake_surft,                          &
-      fqw_evapsrce_wtrac(:,:,:,i_wt), fqw_evapsrce_wtrac(:,:,:,1),             &
+      canopy_wtrac(:,:,i_wt), qw_1_wtrac(:,:,i_wt), wt_ext_surft,              &
+      ei_surft, esoil_surft, esoil_soilt, ecan_surft, elake_surft,             &
       fqw_surft_wtrac(:,:,i_wt), ei_wtrac(:,:,i_wt),                           &
       ei_surft_wtrac(:,:,i_wt), esoil_soilt_wtrac(:,:,:,i_wt),                 &
       esoil_surft_wtrac(:,:,i_wt), ext_soilt_wtrac(:,:,:,i_wt),                &

@@ -30,7 +30,7 @@ USE parkind1, ONLY: jprb, jpim
 USE jules_surface_mod, ONLY: l_flake_model
 USE jules_surface_types_mod, ONLY: lake
 
-USE jules_water_tracers_mod, ONLY: l_wtrac_jls
+USE jules_water_tracers_mod, ONLY: l_wtrac_jls, wtrac_calc_ratio_fn_jules
 
 USE um_types, ONLY: real_jlslsm
 
@@ -112,8 +112,10 @@ REAL(KIND=real_jlslsm) ::                                                      &
     ! Local runoff.
   runoff_wtrac,                                                                &
     ! Local water tracer runoff.
-  smallestp
+  smallestp,                                                                   &
     ! Smallest +ve number that can be represented.
+  ratio_wt
+    ! Water tracer to water ratio
 
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
@@ -177,7 +179,7 @@ END DO
 ! Water tracers
 IF (l_wtrac_jls) THEN
 !$OMP PARALLEL DEFAULT(NONE)                                                   &
-!$OMP PRIVATE(i, j, i_wt, runoff_wtrac)                                        &
+!$OMP PRIVATE(i, j, i_wt, runoff_wtrac, ratio_wt)                              &
 !$OMP SHARED(surft_pts, surft_index, r, r_wtrac, runoff, surf_roff_wtrac,      &
 !$OMP        surf_roff_surft_wtrac, frac, l_flake_model, n_wtrac_jls,          &
 !$OMP        curr_surft, lake)
@@ -187,7 +189,8 @@ IF (l_wtrac_jls) THEN
       i = surft_index(j)
       runoff_wtrac = 0.0
       IF ( r(i) > EPSILON(r(i)) ) THEN
-        runoff_wtrac = (r_wtrac(i,i_wt)/r(i)) * runoff(i)
+        ratio_wt = wtrac_calc_ratio_fn_jules(i_wt,r_wtrac(i,i_wt),r(i))   
+        runoff_wtrac = ratio_wt * runoff(i)
       END IF
 
       surf_roff_surft_wtrac(i,curr_surft,i_wt) =                               &

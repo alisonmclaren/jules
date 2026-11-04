@@ -32,8 +32,9 @@ USE parkind1, ONLY: jprb, jpim
 USE jules_surface_mod, ONLY: l_flake_model
 USE jules_surface_types_mod, ONLY: lake
 
-USE jules_water_tracers_mod, ONLY: l_wtrac_jls
-
+USE jules_water_tracers_mod, ONLY: l_wtrac_jls, wtrac_calc_ratio_fn_jules,     &
+                                   standard_ratio_wtrac
+     
 USE um_types, ONLY: real_jlslsm
 
 IMPLICIT NONE
@@ -114,8 +115,10 @@ REAL(KIND=real_jlslsm) ::                                                      &
     ! CAN_WCNT / CAN_CPY
   smallp,                                                                      &
     ! Small positive number << 1.
-  smallestp
+  smallestp,                                                                   &
     ! Smallest +ve real which can be represented.
+  ratio_wt
+    ! Water tracer to water ratio
 
 !-----------------------------------------------------------------------------
 ! Local array variables:
@@ -181,7 +184,7 @@ IF (l_wtrac_jls) THEN
 
   ALLOCATE(tfall_wtrac(npnts,n_wtrac_jls))
 
-!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(j, i, i_wt)                            &
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(j, i, i_wt, ratio_wt)                  &
 !$OMP SHARED(surft_pts, surft_index, can_cpy, r, r_wtrac, smallp, timestep,    &
 !$OMP        can_wcnt_wtrac, tfall, tfall_wtrac, tot_tfall_wtrac, frac,        &
 !$OMP        tot_tfall_surft_wtrac, l_flake_model, lake, curr_surft,           &
@@ -191,7 +194,8 @@ IF (l_wtrac_jls) THEN
     i = surft_index(j)
     IF ( can_cpy(i)  >  0.0 .AND. r(i) > smallp ) THEN
       DO i_wt = 1, n_wtrac_jls
-        tfall_wtrac(i,i_wt) = (r_wtrac(i,i_wt)/r(i)) * tfall(i)
+        ratio_wt = wtrac_calc_ratio_fn_jules(i_wt,r_wtrac(i,i_wt),r(i))  
+        tfall_wtrac(i,i_wt) = ratio_wt * tfall(i)
       END DO
     ELSE
       DO i_wt = 1, n_wtrac_jls

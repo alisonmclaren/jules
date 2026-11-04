@@ -75,9 +75,6 @@ REAL(KIND=real_jlslsm) :: wtrac_lake_fixed_ratio(max_wtrac) = 1.0
 REAL(KIND=real_jlslsm), PARAMETER :: h218o_lake_ratio = 1.0
 REAL(KIND=real_jlslsm), PARAMETER :: hdo_lake_ratio   = 1.0
 
-! Minimum water value used to calculate water tracer ratios
-REAL(KIND=real_jlslsm), PARAMETER :: min_q_ratio = 1.0e-18
-
 CHARACTER(LEN=*), PARAMETER, PRIVATE ::                                        &
                             ModuleName='JULES_WATER_TRACERS_MOD'
 
@@ -97,6 +94,8 @@ REAL FUNCTION wtrac_calc_ratio_fn_jules(i_wt, q_wtrac, q)
 !
 !-----------------------------------------------------------------------------
 
+USE water_tracers_set_mod,   ONLY: min_q_wt_calc, l_wtrac_no_neg_ratio
+  
 IMPLICIT NONE
 
 INTEGER, INTENT(IN) :: i_wt                     ! Water tracer number
@@ -109,14 +108,15 @@ REAL(KIND=real_jlslsm) :: q_ratio_std           ! Standard ratio
 
 q_ratio_std = standard_ratio_wtrac(i_wt)
 
-IF (ABS(q) > min_q_ratio) THEN
+IF (ABS(q) > min_q_wt_calc) THEN
   q_ratio = q_wtrac / q
 ELSE
   q_ratio = q_ratio_std
 END IF
 
-! Yet to be decided if it's best to block negative ratios or not.
-!IF (q_ratio < 0.0) q_ratio = q_ratio_std
+IF (l_wtrac_no_neg_ratio) THEN
+  IF (q_ratio < 0.0) q_ratio = q_ratio_std
+END IF
 
 wtrac_calc_ratio_fn_jules = q_ratio
 

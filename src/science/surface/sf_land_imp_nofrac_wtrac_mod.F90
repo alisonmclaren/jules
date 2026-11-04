@@ -1,5 +1,5 @@
 !******************************COPYRIGHT****************************************
-! (c) British Antarctic Survey and University of Bristol, 2023.
+! (c) British Antarctic Survey, 2025.
 ! All rights reserved.
 !
 ! This routine has been licensed to the other JULES partners for use and
@@ -9,23 +9,15 @@
 ! [Met Office Ref SC0237]
 !******************************COPYRIGHT****************************************
 
-MODULE sf_land_imp_wtrac_mod
+MODULE sf_land_imp_nofrac_wtrac_mod
 
 !------------------------------------------------------------------------------
 ! Description:
 !    Calculate final water tracer surface fluxes over land.
 !
 ! Method:
-!   Update the explicit water tracer surface fluxes over land for changes
-!   in the normal water flux due to:
-!   a) the implicit calculation (in sf_im_pt2)
-!   b) ensuring there is sufficient water for the individual evaporative
-!      fluxes (sf_evap)
-!   c) any change in temperature caused by surface melt (sf_melt).
-!
-!   Water tracers are updated here based on the assumption that the surface
-!   flux ratio of water tracer to water remains constant between the explicit
-!   and implicit schemes for each evaporative source type.
+!   Use water tracer flux = normal water flux * source_ratio
+!   (so assuming no fractionation)
 !
 ! Code Owner: Please refer to ModuleLeaders.txt
 ! This file belongs in Surface
@@ -39,31 +31,37 @@ USE um_types, ONLY: real_jlslsm
 IMPLICIT NONE
 
 
-CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='SF_LAND_IMP_WTRAC_MOD'
+CHARACTER(LEN=*), PARAMETER, PRIVATE ::                                        &
+                                 ModuleName='SF_LAND_IMP_NOFRAC_WTRAC_MOD'
 
 CONTAINS
 
-SUBROUTINE sf_land_imp_wtrac (                                                 &
- land_pts, nsurft, sm_levels, n_evap_srce,                                     &
- surft_pts, land_index, surft_index, timestep, std_ratio, flandg, tile_frac,   &
+SUBROUTINE sf_land_imp_nofrac_wtrac (                                          &
+ i_wt, land_pts, nsurft, sm_levels, n_evap_srce,                               &
+ surft_pts, land_index, surft_index, timestep, flandg, tile_frac,              &
  non_lake_frac,                                                                &
- snow_surft_wtrac, smc_soilt_wtrac, canopy_wtrac, wt_ext_surft,                &
- ei_surft, esoil_surft, ecan_surft, elake_surft,                               &
- fqw_evapsrce_wtrac, fqw_norm_wtrac, fqw_surft_wtrac,                          &
+ snow_surft, smc_soilt, canopy, qw_1,                                          &
+ snow_surft_wtrac, smc_soilt_wtrac, canopy_wtrac, qw_1_wtrac, wt_ext_surft,    &
+ ei_surft, esoil_surft, esoil_soilt, ecan_surft, elake_surft,                  &
+ fqw_surft_wtrac,                                                              &
  ei_wtrac, ei_surft_wtrac, esoil_soilt_wtrac, esoil_surft_wtrac,               &
  ext_soilt_wtrac, ecan_wtrac, ecan_surft_wtrac, elake_surft_wtrac,             &
  fqw_1_wtrac, dfqw_wtrac )
 
+USE atm_fields_bounds_mod,   ONLY: tdims
+USE theta_field_sizes,       ONLY: t_i_length
 
-USE atm_fields_bounds_mod, ONLY: tdims
-USE theta_field_sizes,     ONLY: t_i_length
-
-USE ancil_info, ONLY: nsoilt
+USE ancil_info,              ONLY: nsoilt
 
 USE jules_water_tracers_mod, ONLY: evap_srce_snow, evap_srce_cano,             &
-                                   evap_srce_soil, evap_srce_lake, min_q_ratio
+                                   evap_srce_soil, evap_srce_lake,             &
+                                   wtrac_calc_ratio_fn_jules,                  &
+                                   wtrac_lake_fixed_ratio,                     &
+                                   standard_ratio_wtrac
+                                   
 USE jules_surface_mod,       ONLY: l_flake_model
 USE jules_surface_types_mod, ONLY: lake
+USE water_constants_mod,     ONLY: tm
 
 USE parkind1, ONLY: jprb, jpim
 USE yomhook,  ONLY: lhook, dr_hook
@@ -71,7 +69,9 @@ USE yomhook,  ONLY: lhook, dr_hook
 IMPLICIT NONE
 
 INTEGER, INTENT(IN) ::                                                         &
- land_pts                                                                      &
+ i_wt                                                                          &
+                       ! IN Water tracer number
+,land_pts                                                                      &
                        ! IN Number of land points to be processed
 ,nsurft                                                                        &
                        ! IN Number of tiles per land point
@@ -89,8 +89,6 @@ INTEGER, INTENT(IN) ::                                                         &
 REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
  timestep                                                                      &
                        ! IN Timestep in seconds
-,std_ratio                                                                     &
-                       ! IN Standard water tracer to water ratio
 ,flandg(tdims%i_start:tdims%i_end, tdims%j_start:tdims%j_end)                  &
                        ! IN Fraction of gridbox which is land
 
@@ -98,6 +96,16 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
                        ! IN Tile fractions
 ,non_lake_frac(land_pts)                                                       &
                        ! IN Sum of fractions of non-FLake surface tiles
+,snow_surft(land_pts,nsurft)                                                   &
+                       ! IN Amount of lying
+                       !           snow on tiles (kg/m2)
+,smc_soilt(land_pts,nsoilt)                                                    &
+                       ! IN Available soil moisture (kg/m2)
+,canopy(land_pts,nsurft)                                                       &
+                       ! IN Amount of surface/canopy
+                       !    water on land tiles (kg/m2)
+,qw_1(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)                     &
+                       ! IN Atmospheric water content 
 ,snow_surft_wtrac(land_pts,nsurft)                                             &
                        ! IN Amount of water tracer in lying
                        !           snow on tiles (kg/m2)
@@ -106,6 +114,8 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
 ,canopy_wtrac(land_pts,nsurft)                                                 &
                        ! IN Amount of water tracer in surface/canopy
                        !    water on land tiles (kg/m2)
+,qw_1_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)              &
+                       ! IN Water tracer atmospheric water content
 ,wt_ext_surft(land_pts,sm_levels,nsurft)
                        ! IN Fraction of transpiration extracted from each soil
                        !    layer by each tile.
@@ -117,6 +127,10 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
                        ! IN Sublimation from snow or land-ice
 ,esoil_surft(land_pts,nsurft)                                                  &
                        ! IN Evapotranspiration from soil moisture
+,esoil_soilt(tdims%i_start:tdims%i_end,                                        &
+                   tdims%j_start:tdims%j_end,nsoilt)                           &
+                       ! IN Land mean evapotranspiration from
+                       !     soil moisture
 ,ecan_surft(land_pts,nsurft)                                                   &
                        ! IN Evaporation from canopy/surface store
 ,elake_surft(land_pts,nsurft)
@@ -124,44 +138,40 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
 
 ! Water tracer fluxes (all kg/m2/s)
 
-REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
- fqw_evapsrce_wtrac(land_pts,n_evap_srce,nsurft)                               &
-                       ! IN Surface water tracer FQW for the seperate
-                       !    evaporative sources on land tiles (calculated
-                       !    in the explicit scheme)
-,fqw_norm_wtrac(land_pts,n_evap_srce,nsurft)
-                       ! IN Surface 'normal water' FQW for the separate
-                       !    evaporative sources (calculated in the explicit
-                       !    scheme)
-
+! Final water tracer flux
+! IN  = explicit flux
+! OUT = final flux based on implicit normal fluxes
 REAL(KIND=real_jlslsm), INTENT(IN OUT) ::                                      &
  fqw_surft_wtrac(land_pts,nsurft)
                        ! IN OUT Water tracer local FQW_1 for tiles.
 
 ! Final water tracer fluxes from each evaporative source (all kg/m2/s)
 REAL(KIND=real_jlslsm), INTENT(OUT) ::                                         &
+ ei_surft_wtrac(land_pts,nsurft)                                               &
+                       ! IN OUT Sublimation of water tracer from snow
+                       !    or land-ice
+,esoil_surft_wtrac(land_pts,nsurft)                                            &
+                       ! IN OUT Water tracer ESOIL for land tiles.
+,ecan_surft_wtrac(land_pts,nsurft)                                             &
+                       ! IN OUT Water tracer ECAN for land tiles
+,elake_surft_wtrac(land_pts,nsurft)
+                       ! IN OUT Lake water tracer evaporation for land tiles
+
+! Final water tracer fluxes from each evaporative source (all kg/m2/s)
+REAL(KIND=real_jlslsm), INTENT(OUT) ::                                         &
  ei_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)                 &
                        ! OUT Land mean water tracer sublimation from
                        !     snow of land-ice
-,ei_surft_wtrac(land_pts,nsurft)                                               &
-                       ! OUT Sublimation of water tracer from snow
-                       !    or land-ice
 ,esoil_soilt_wtrac(tdims%i_start:tdims%i_end,                                  &
                    tdims%j_start:tdims%j_end,nsoilt)                           &
                        ! OUT Land mean water tracer evapotranspiration from
                        !     soil moisture
-,esoil_surft_wtrac(land_pts,nsurft)                                            &
-                       ! OUT Water tracer ESOIL for land tiles.
 ,ext_soilt_wtrac(land_pts,nsoilt,sm_levels)                                    &
                        ! OUT Extraction of water tracer from each
                        !     soil layer of land tiles.
 ,ecan_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)               &
                        ! OUT Land mean water tracer evaporation from
                        !     canopy/surface store
-,ecan_surft_wtrac(land_pts,nsurft)                                             &
-                       ! OUT Water tracer ECAN for land tiles
-,elake_surft_wtrac(land_pts,nsurft)                                            &
-                       ! OUT Lake water tracer evaporation for land tiles
 ,fqw_1_wtrac(tdims%i_start:tdims%i_end,tdims%j_start:tdims%j_end)              &
                        ! OUT GBM Surface moisture flux of water
                        !       tracers
@@ -176,10 +186,10 @@ INTEGER ::                                                                     &
              ! Loop counter (horizontal field index).
 ,k                                                                             &
              ! Loop counter (land, snow or land-ice field index).
-,m                                                                             &
-             ! Loop counter (soil level index).
 ,l                                                                             &
              ! Loop counter (land point field index).
+,m                                                                             &
+             ! Loop counter (soil level index).
 ,n                                                                             &
              ! Loop counter (tile index).
 ,mm                                                                            &
@@ -189,25 +199,41 @@ INTEGER ::                                                                     &
 
 REAL(KIND=real_jlslsm) ::                                                      &
  edt                                                                           &
-                       ! Temperature field updated for flux
+                       ! Water field temporarily updated for flux
 ,fqw_surft_wtrac_old                                                           &
                        ! Water tracer surface moisture flux
                        ! before adjustment.
-,fqw_ratio(land_pts,n_evap_srce,nsurft)
-                       ! Ratio of water tracer flux to normal water flux
+,ratio_wt
+                       ! Ratio of water tracer to normal water
+
+REAL(KIND=real_jlslsm) :: qw_atm_ratio(tdims%i_start:tdims%i_end,              &
+                                       tdims%j_start:tdims%j_end)
+                       ! Ratio of atmospheric water tracer to normal water
+
 
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
 REAL(KIND=jprb)               :: zhook_handle
 
-CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_LAND_IMP_WTRAC'
+CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_LAND_IMP_NOFRAC_WTRAC'
 
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
 
-!$OMP PARALLEL                                                                 &
-!$OMP DEFAULT(SHARED)                                                          &
-!$OMP PRIVATE(i,j,l,k,n_evap,m,mm,n,edt,fqw_surft_wtrac_old)
+!$OMP PARALLEL DEFAULT(NONE)                                                   &
+!$OMP PRIVATE(i,j,k,l,n_evap,m,mm,n,edt,fqw_surft_wtrac_old,ratio_wt)          &
+!$OMP SHARED(tdims,i_wt,land_pts,nsurft,sm_levels,n_evap_srce,surft_pts,       &
+!$OMP        land_index,surft_index,timestep,flandg,tile_frac,non_lake_frac,   &
+!$OMP        nsoilt,t_i_length,wtrac_lake_fixed_ratio,l_flake_model,lake,      &
+!$OMP        snow_surft,smc_soilt,canopy,snow_surft_wtrac,                     &
+!$OMP        smc_soilt_wtrac,canopy_wtrac,qw_1,qw_1_wtrac,wt_ext_surft,        &
+!$OMP        ei_surft,esoil_surft,esoil_soilt,ecan_surft,elake_surft,          &
+!$OMP        fqw_surft_wtrac,ei_wtrac,ei_surft_wtrac,esoil_soilt_wtrac,        &
+!$OMP        esoil_surft_wtrac,ext_soilt_wtrac,ecan_wtrac,ecan_surft_wtrac,    &
+!$OMP        elake_surft_wtrac,fqw_1_wtrac,dfqw_wtrac,qw_atm_ratio )
 
+! ***************************************************************
+! 1. Initalisation
+! ***************************************************************
 ! Initialise GBM water tracer surface flux to zero - this is different to
 ! the treatment of normal water in sf_evap.  This is because the GBM normal
 ! water flux is updated for the implicit solution in im_sf_pt2 and then a
@@ -225,7 +251,11 @@ DO j = tdims%j_start,tdims%j_end
     END DO
     ecan_wtrac(i,j)          = 0.0
     ei_wtrac(i,j)            = 0.0
-  END DO
+
+    ! Calculate atmospheric water tracer ratio
+    qw_atm_ratio(i,j) = wtrac_calc_ratio_fn_jules(i_wt,                        &
+                                                  qw_1_wtrac(i,j),qw_1(i,j))
+ END DO
 END DO
 !$OMP END DO NOWAIT
 
@@ -238,8 +268,9 @@ DO n = 1, nsurft
     ecan_surft_wtrac(l,n)  = 0.0
     elake_surft_wtrac(l,n) = 0.0
   END DO
-!$OMP END DO NOWAIT
+!$OMP END DO
 END DO
+
 ! Initialise the extraction of water tracers from each layer
 DO m = 1,sm_levels
   DO mm = 1, nsoilt
@@ -247,63 +278,81 @@ DO m = 1,sm_levels
     DO l = 1,land_pts
       ext_soilt_wtrac(l,mm,m) = 0.0
     END DO
-!$OMP END DO NOWAIT
+!$OMP END DO
   END DO
 END DO
 
-! Calculate the ratio of the moisture fluxes for water tracers to
-! moisture fluxes for normal water which were calculated in the explicit
-! scheme.
+! **************************************************************************
+! 2. Set water tracer fluxes as simple scaled versions of the final implicit
+!    normal water fluxes
+! **************************************************************************
+
 DO n = 1,nsurft
 !$OMP DO SCHEDULE(STATIC)
   DO k = 1,surft_pts(n)
     l = surft_index(k,n)
-    DO n_evap = 1, n_evap_srce
-      IF (ABS(fqw_norm_wtrac(l,n_evap,n)) > min_q_ratio) THEN
-        fqw_ratio(l,n_evap,n) = fqw_evapsrce_wtrac(l,n_evap,n)                 &
-                                  / fqw_norm_wtrac(l,n_evap,n)
-      ELSE
-        fqw_ratio(l,n_evap,n) = std_ratio
+    j = (land_index(l) - 1) / t_i_length + 1
+    i = land_index(l) - (j-1) * t_i_length
+
+    ! Snow  
+
+    IF (ei_surft(l,n) < 0.0) THEN
+      ! Source is the atmosphere
+      ei_surft_wtrac(l,n) = qw_atm_ratio(i,j) * ei_surft(l,n)
+
+    ELSE
+      ! Source is the snow
+      ratio_wt = wtrac_calc_ratio_fn_jules(i_wt,snow_surft_wtrac(l,n),        &
+                                           snow_surft(l,n))
+      ei_surft_wtrac(l,n) = ratio_wt * ei_surft(l,n)
+    END IF
+
+    IF (snow_surft(l,n) > 0.0) THEN
+      ! Check if all snow is removed, if yes, remove all tracer
+      edt = ei_surft(l,n) * timestep
+      IF ( (snow_surft(l,n) - edt) < EPSILON(snow_surft) ) THEN
+        ei_surft_wtrac(l,n) = snow_surft_wtrac(l,n)/timestep
       END IF
-    END DO
-  END DO
-!$OMP END DO
-END DO
+    END IF 
 
-! Update explicit fluxes to account for the normal water flux changing in
-! the implicit scheme.
-!
-! Assumption here is that the ratio of isotopic evaporative fluxes to normal
-! water evaporative fluxes remains UNCHANGED.
-!
-! This is new_wtrac_flux = old_wtrac_flux
-!                           + ratio * (new_water_flux - old_water_flux)
-! where ratio = old_wtrac_flux/old_water_flux
-!
-! which can be reduced to new_wtrac_flux = ratio * new_water_flux
+    ! Canopy
 
-DO n = 1,nsurft
-!$OMP DO SCHEDULE(STATIC)
-  DO k = 1,surft_pts(n)
-    l = surft_index(k,n)
+    IF (ecan_surft(l,n) < 0.0) THEN
+      ! Source is the atmosphere
+       ecan_surft_wtrac(l,n) = qw_atm_ratio(i,j) * ecan_surft(l,n)
 
-    ! Snow_sublimation
-    ei_surft_wtrac(l,n)    = fqw_ratio(l,evap_srce_snow,n) * ei_surft(l,n)
-
-    ! Soil evapotranspiration
-    esoil_surft_wtrac(l,n) = fqw_ratio(l,evap_srce_soil,n) * esoil_surft(l,n)
-
-    ! Canopy intercepted water evaporation
-    ecan_surft_wtrac(l,n)  = fqw_ratio(l,evap_srce_cano,n) * ecan_surft(l,n)
-
+    ELSE
+      ! Source is the canopy
+      ratio_wt = wtrac_calc_ratio_fn_jules(i_wt,canopy_wtrac(l,n),             &
+                                           canopy(l,n))
+      ecan_surft_wtrac(l,n) = ratio_wt * ecan_surft(l,n)
+    END IF
+   
+    ! Check if all canopy water is removed, if yes, remove all tracer
+    IF (canopy(l,n) > 0.0) THEN
+      edt = ecan_surft(l,n) * timestep
+      IF ( (canopy(l,n) - edt) < EPSILON(canopy) ) THEN
+        ecan_surft_wtrac(l,n) = canopy_wtrac(l,n)/timestep
+      END IF
+    END IF
+      
     ! Lake
-    elake_surft_wtrac(l,n) = fqw_ratio(l,evap_srce_lake,n) * elake_surft(l,n)
+    
+    IF (elake_surft(l,n) < 0.0) THEN
+      ! Source is the atmosphere
+      elake_surft_wtrac(l,n) = qw_atm_ratio(i,j) * elake_surft(l,n)
+
+    ELSE
+      ! Source is the lake
+      ratio_wt = wtrac_lake_fixed_ratio(i_wt)
+      elake_surft_wtrac(l,n) = ratio_wt * elake_surft(l,n)
+    END IF
 
   END DO
 !$OMP END DO
 END DO
 
-! Calculate land mean evapotranspiration for water tracers from soil moisture
+! Calculate water tracer soil evapotranspiration
 DO n = 1,nsurft
   !Set the current soil tile
   IF (nsoilt == 1) THEN
@@ -316,7 +365,51 @@ DO n = 1,nsurft
 !$OMP DO SCHEDULE(STATIC)
   DO k = 1,surft_pts(n)
     l = surft_index(k,n)
-    j=(land_index(l) - 1) / t_i_length + 1
+    j = (land_index(l) - 1) / t_i_length + 1
+    i = land_index(l) - (j-1) * t_i_length
+
+    IF (esoil_surft(l,n) < 0.0) THEN
+      ! Source is the atmospheric value
+      esoil_surft_wtrac(l,n) = qw_atm_ratio(i,j) * esoil_surft(l,n)
+    ELSE
+      ! Source is the surface snow value      
+      ratio_wt = wtrac_calc_ratio_fn_jules(i_wt,smc_soilt_wtrac(l,mm),         &
+                                                smc_soilt(l,mm))
+      esoil_surft_wtrac(l,n) = ratio_wt * esoil_surft(l,n)
+
+      ! Check if all soil moisture has been removed is made later on
+    END IF 
+
+  END DO
+!$OMP END DO
+END DO
+
+! Calculate land mean evapotranspiration for water tracers from soil moisture
+
+!$OMP DO SCHEDULE(STATIC)
+DO j = tdims%j_start,tdims%j_end
+  DO i = tdims%i_start,tdims%i_end
+    DO mm = 1, nsoilt
+      ! Re-initialise field
+      esoil_soilt_wtrac(i,j,mm) = 0.0
+    END DO
+  END DO
+END DO
+!$OMP END DO
+
+DO n = 1,nsurft
+  !Set the current soil tile
+  IF (nsoilt == 1) THEN
+    !There is only 1 soil tile
+    mm = 1
+  ELSE  ! nsoilt == nsurft
+    !Soil tiles map directly on to surface tiles
+    mm = n
+  END IF
+!$OMP DO SCHEDULE(STATIC)
+  DO k = 1,surft_pts(n)
+    l = surft_index(k,n)
+    j = (land_index(l) - 1) / t_i_length + 1
     i = land_index(l) - (j-1) * t_i_length
 
     IF ( .NOT. ((l_flake_model) .AND. (n == lake) .AND. (nsoilt == 1)) ) THEN
@@ -333,7 +426,7 @@ IF ((nsoilt == 1) .AND. (l_flake_model)) THEN
 !$OMP DO SCHEDULE(STATIC)
   DO l = 1,land_pts
     IF (non_lake_frac(l) > EPSILON(0.0)) THEN
-      j=(land_index(l) - 1) / t_i_length + 1
+      j = (land_index(l) - 1) / t_i_length + 1
       i = land_index(l) - (j-1) * t_i_length
       esoil_soilt_wtrac(i,j,1) = esoil_soilt_wtrac(i,j,1) / non_lake_frac(l)
     END IF
@@ -341,11 +434,13 @@ IF ((nsoilt == 1) .AND. (l_flake_model)) THEN
 !$OMP END DO
 END IF
 
-! If necessary, reduce the calculated evaporative fluxes if there is
+! ***********************************************************************
+! 3. If necessary, reduce the calculated evaporative fluxes if there is
 ! insufficient source water tracer.
 ! (Note, there is no check on lakes, as it is assummed that there is infinite
 !  water and water tracer available)
-
+! ***********************************************************************
+   
 ! First check sublimation and canopy evaporation
 DO n = 1,nsurft
 !$OMP DO SCHEDULE(STATIC)
@@ -355,15 +450,19 @@ DO n = 1,nsurft
     ! Ensure the sublimation flux does not remove more water tracer from the
     ! snow than is available
     IF (ei_surft_wtrac(l,n) > 0.0) THEN
-      ei_surft_wtrac(l,n) = MIN( ei_surft_wtrac(l,n),                          &
+      IF (ei_surft_wtrac(l,n) > snow_surft_wtrac(l,n) / timestep) THEN
+        ei_surft_wtrac(l,n) = MIN( ei_surft_wtrac(l,n),                        &
                                  snow_surft_wtrac(l,n)/timestep )
+      END IF
     END IF
 
     ! Ensure the canopy evap flux does not remove more water tracer from the
     ! canopy than is available
     IF (ecan_surft_wtrac(l,n) > 0.0) THEN
-      ecan_surft_wtrac(l,n) = MIN( ecan_surft_wtrac(l,n),                      &
-                                   canopy_wtrac(l,n) / timestep )
+      IF (ecan_surft_wtrac(l,n) > canopy_wtrac(l,n) / timestep) THEN
+        ecan_surft_wtrac(l,n) = MIN( ecan_surft_wtrac(l,n),                    &
+                                     canopy_wtrac(l,n) / timestep )
+      END IF      
     END IF
 
     ! No check on lakes, as assumption is there is infinite water and water
@@ -378,7 +477,7 @@ END DO
 
 !$OMP DO SCHEDULE(STATIC)
 DO l = 1,land_pts
-  j=(land_index(l) - 1) / t_i_length + 1
+  j = (land_index(l) - 1) / t_i_length + 1
   i = land_index(l) - (j-1) * t_i_length
   IF (nsoilt == 1) THEN
     ! There is only 1 soil tile
@@ -407,7 +506,10 @@ DO l = 1,land_pts
 END DO
 !$OMP END DO
 
-! Now, calculate the extraction of water tracers from each soil layer
+! *********************************************************************
+! 4. Calculate the extraction of water tracers from each soil layer
+! *********************************************************************
+
 DO m = 1,sm_levels
   DO n = 1,nsurft
 
@@ -451,9 +553,10 @@ DO m = 1,sm_levels
 
 END DO !sm_levels
 
-
-! Now that all the individual surface fluxes are finalised,
+! ************************************************************************
+! 5. Now that all the individual surface fluxes are finalised,
 ! calculate GBM water tracer surface flux and the increment
+! ************************************************************************
 
 DO n = 1,nsurft
 !$OMP DO SCHEDULE(STATIC)
@@ -480,8 +583,9 @@ DO n = 1,nsurft
 END DO
 !$OMP END PARALLEL
 
+
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_out,zhook_handle)
 RETURN
-END SUBROUTINE sf_land_imp_wtrac
+END SUBROUTINE sf_land_imp_nofrac_wtrac
 
-END MODULE sf_land_imp_wtrac_mod
+END MODULE sf_land_imp_nofrac_wtrac_mod

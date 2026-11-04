@@ -108,10 +108,12 @@ TYPE :: jls_wtrac_data_type
     ! Water tracer soil moisture of layer on soil tiles (kg/m2)
     ! Used in: extra (hydrol, rivers)
     ! Dimensions: (land_pts,nsoilt,sm_levels,n_wtrac_jls)
-    ! UM stash code: 33,185  (Note, in UM, nsoilt = 1)
+    ! UM stash code: 33,185  (PROGNOSTIC) (Note, in UM, nsoilt = 1)
+    !                33,211  (DIAGNOSTIC)
     ! Normal water equivalents: progs%smcl_soilt (In UM: soil_layer_moisture)
     !                                           !(UM stash code: 0,009)
-
+    !                                           !(Diagnostic: 8,223)
+  
   REAL(KIND=real_jlslsm), ALLOCATABLE :: sthzw_soilt(:,:,:)
     ! Water tracer soil moisture fraction in additional deep soil layer
     ! relative to saturation.
@@ -332,7 +334,8 @@ TYPE :: jls_wtrac_data_type
   ! Used in: implicit
   ! Dimensions: (t_i_length,t_j_length,n_wtrac_jls)
   ! UM stash code: 33,204
-  ! Normal water equivalents: fluxes%ei_ij  (UM stash code: 3,298)
+  ! Normal water equivalents: fluxes%ei_ij  (UM stash code: 3,298 - but note
+  !                           this is a GBM field and includes sea ice sublim)
 
   REAL(KIND=real_jlslsm), ALLOCATABLE :: ecan_ij(:,:,:)
   ! Water tracer evaporation from canopy/surface store (land mean) (kg/m2/s)
@@ -364,12 +367,14 @@ TYPE :: jls_wtrac_data_type
   ! Passed between JULES surf_couple_* routines
 
   REAL(KIND=real_jlslsm), ALLOCATABLE :: smc_soilt(:,:,:)
-    ! Soil moisture water tracer in a layer at the surface (kg/m2).
+    ! Soil moisture water tracer available for evapotranspiration (kg/m2).
     ! Used in: explicit, implicit and extra (hydrol)
-    ! Dimensions: (land_pts,nsoilt,sm_levels,n_wtrac_jls)
-    ! UM stash code: NONE (store in this module only)
+    ! Dimensions: (land_pts,nsoilt,n_wtrac_jls)
+    ! UM stash code: 33,212 (but DIAGNOSTIC only - calculated in surface code)
     ! Normal water equivalents: progs%smc_soilt   (UM stash code: NONE - local
     !                                               field in AP2)
+    ! (Note the diagnostic 8,208 for normal water is calculated in the soil
+    !  code and is different to the calculation used in the surface code.)
 
   REAL(KIND=real_jlslsm), ALLOCATABLE :: ext_soilt(:,:,:,:)
     ! Extraction of water tracers by plants from each soil layer (kg/m2/s)
