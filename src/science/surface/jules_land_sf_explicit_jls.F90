@@ -2746,9 +2746,10 @@ IF (l_wtrac_jls) THEN
     ! the tile subject to potential evaporation. fracaero_s(:,n) is required
     ! only for energetic purposes.
     CALL sf_evap_srce_frac(land_pts, surft_pts(n), surft_index(:,n),           &
-                           flake(:,n), fracaero_t(:,n), snowdep_surft(:,n),    &
-                           dq(:,n), catch(:,n), cansnowtile(n),                &
-                           evap_srce_frac(:,:,n))
+                           flake(:,n), fracaero_t(:,n), fracaero_s(:,n),       &
+                           snowdep_surft(:,n),                                 &
+                           snow_surft(:,n), tstar_surft(:,n), dq(:,n),         &
+                           catch(:,n), cansnowtile(n), evap_srce_frac(:,:,n))
 
     !Set the current soil tile
     IF (nsoilt == 1) THEN
@@ -2764,7 +2765,7 @@ IF (l_wtrac_jls) THEN
       ! Set up resistance factors which include any kinetic fractionation
       CALL sf_resist_wtrac(i_wt, n, land_pts, surft_pts(n),                    &
                            surft_index(:,n), snowdep_surft(:,n),               &
-                           resfs(:,n), dq(:,n), catch(:,n),                    &
+                           snow_surft(:,n), resfs(:,n), dq(:,n), catch(:,n),   &
                            evap_srce_frac(:,:,n),                              &
                            cansnowtile(n), resf_wtrac(:,:,n,i_wt))
 

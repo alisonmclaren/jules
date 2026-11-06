@@ -57,6 +57,10 @@ USE sf_diags_mod, ONLY: strnewsfdiag
 
 USE parkind1, ONLY: jprb, jpim
 USE yomhook, ONLY: lhook, dr_hook
+
+!TEMP*
+USE jules_print_mgr, ONLY: jules_message, jules_print, newline
+
 IMPLICIT NONE
 
 INTEGER ::                                                                     &
@@ -225,6 +229,8 @@ INTEGER ::                                                                     &
 ,mm
               ! Index for soil tile
 
+INTEGER:: l0,n0
+
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
 REAL(KIND=jprb)               :: zhook_handle
@@ -232,6 +238,9 @@ REAL(KIND=jprb)               :: zhook_handle
 CHARACTER(LEN=*), PARAMETER :: RoutineName='SF_EVAP'
 
 IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
+
+l0 = 9
+n0 = 1
 
 !$OMP PARALLEL                                                                 &
 !$OMP DEFAULT(SHARED)                                                          &
@@ -277,6 +286,13 @@ DO n = 1,nsurft
         le_surft_old(l,n) = le_surft_old(l,n) + lf * ei_surft(l,n)
 
       END IF
+      IF (l == l0 .AND. n == n0) THEN 
+           WRITE(jules_message,*)                                            &
+                'sf_evap 0', snow_surft(l,n),canopy(l,n),fqw_surft(l,n),       &
+                 ecan_surft(l,n),ei_surft(l,n),                               &
+                fracaero_t(l,n),fracaero_s(l,n),resft(l,n),resfs(l,n)
+!           CALL jules_print(RoutineName, jules_message)
+      END IF
     ELSE
       IF (snow_surft(l,n)  >   0.0) THEN
         le_surft_old(l,n) = (lc + lf) * fqw_surft(l,n)
@@ -319,7 +335,13 @@ DO n = 1,nsurft
             ei_surft(l,n) = snow_surft(l,n) / timestep
           END IF
         END IF
-      ELSE
+      IF (l == l0 .AND. n == n0) THEN 
+           WRITE(jules_message,*)                                  &
+                'sf_evap 1', snow_surft(l,n),ecan_surft(l,n),ei_surft(l,n)
+!           CALL jules_print(RoutineName, jules_message)
+      END IF
+
+     ELSE
         ei_surft(l,n) =  fqw_surft(l,n)
         edt = ei_surft(l,n) * timestep
         IF ( edt  >   snow_surft(l,n) )                                        &
@@ -433,6 +455,12 @@ DO n = 1,nsurft
           END IF
         END IF
         ecan_surft(l,n) = canopy(l,n) / timestep
+      END IF
+      IF (l == l0 .AND. n == n0) THEN 
+           WRITE(jules_message,*)                                  &
+                'sf_evap 2', canopy(l,n),ecan_surft(l,n),esoil_surft(l,n)
+!           CALL jules_print(RoutineName, jules_message)
+
       END IF
     ELSE IF (snow_surft(l,n) <= 0.0) THEN
       IF (tstar_surft(l,n) >= tm) THEN

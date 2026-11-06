@@ -45,6 +45,9 @@ TYPE :: wtrac_sn_type
         ! (kg/m2) - includes any canopy unloading.
   REAL(KIND=real_jlslsm), ALLOCATABLE :: graupfall(:,:)
         ! Water tracer graupel reaching the ground in timestep (kg/m2).
+  REAL(KIND=real_jlslsm), ALLOCATABLE :: snowinc_surft(:,:,:)
+        ! Water tracer surface snow increment due to sublimation and melting
+        ! (kg/m2/timestep)
   REAL(KIND=real_jlslsm), ALLOCATABLE :: sice0(:,:)
         ! Water tracer ice content of fresh snow (kg/m2).
         ! Where nsnow=0, sice0 is the mass of the snowpack.
@@ -111,6 +114,7 @@ IF (l_wtrac_jls) THEN
   ALLOCATE(wtrac_sn%sliq_sl(land_pts,nsmax,n_wtrac_jls))
   ALLOCATE(wtrac_sn%snowfall(land_pts,n_wtrac_jls))
   ALLOCATE(wtrac_sn%graupfall(land_pts,n_wtrac_jls))
+  ALLOCATE(wtrac_sn%snowinc_surft(land_pts,nsurft,n_wtrac_jls))
   ALLOCATE(wtrac_sn%sice0(land_pts,n_wtrac_jls))
   ALLOCATE(wtrac_sn%infiltration(land_pts,n_wtrac_jls))
   ALLOCATE(wtrac_sn%infil_rate_con_gbm(land_pts,n_wtrac_jls))
@@ -127,7 +131,8 @@ IF (l_wtrac_jls) THEN
     DO n = 1, nsurft
 !$OMP DO SCHEDULE(STATIC)
       DO i = 1, land_pts
-        wtrac_sn%snow_can(i,n,i_wt) = 0.0
+        wtrac_sn%snow_can(i,n,i_wt)      = 0.0
+        wtrac_sn%snowinc_surft(i,n,i_wt) = 0.0
       END DO
 !$OMP END DO
     END DO
@@ -164,6 +169,7 @@ ELSE
   ALLOCATE(wtrac_sn%sliq_sl(1,1,1))
   ALLOCATE(wtrac_sn%snowfall(1,1))
   ALLOCATE(wtrac_sn%graupfall(1,1))
+  ALLOCATE(wtrac_sn%snowinc_surft(1,1,1))
   ALLOCATE(wtrac_sn%sice0(1,1))
   ALLOCATE(wtrac_sn%infiltration(1,1))
   ALLOCATE(wtrac_sn%infil_rate_con_gbm(1,1))
@@ -210,6 +216,7 @@ DEALLOCATE(wtrac_sn%infil_rate_ls_gbm)
 DEALLOCATE(wtrac_sn%infil_rate_con_gbm)
 DEALLOCATE(wtrac_sn%infiltration)
 DEALLOCATE(wtrac_sn%sice0)
+DEALLOCATE(wtrac_sn%snowinc_surft)
 DEALLOCATE(wtrac_sn%graupfall)
 DEALLOCATE(wtrac_sn%snowfall)
 DEALLOCATE(wtrac_sn%sliq_sl)

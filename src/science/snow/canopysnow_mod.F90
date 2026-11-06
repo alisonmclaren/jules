@@ -239,22 +239,37 @@ IF ( cansnowtile ) THEN
         ! intercept for water tracers. (Use snowfall value on input to routine.)
         ratio_snowfall          = wtrac_calc_ratio_fn_jules(i_wt,              &
                                   snowfall_wtrac(i,i_wt), snowfall_old(k))
-        intercept_wtrac         = intercept(k) * ratio_snowfall
 
         ! Calculate water tracer to water ratio for canopy snow to scale
         ! unload for water tracers. (Use snow_can value on input to routine.)
         ratio_snow_can          = wtrac_calc_ratio_fn_jules(i_wt,              &
                                   snow_can_wtrac(i,i_wt), snow_can_old(k))
-        unload_wtrac            = unload(k) * ratio_snow_can
 
-        unload_wtrac            = MAX( MIN( unload_wtrac,                      &
+        IF (l_fix_neg_snow) THEN
+          ! Ensure the interception and the unloading are non-negative
+          ! and ensure that the final canopy snow amount does not exceed
+          ! the canopy capacity.
+          intercept_wtrac = MAX(0.0, intercept(k)*ratio_snowfall)
+          unload_wtrac    = MAX(0.0, unload(k)*ratio_snow_can)
+
+          snow_can_wtrac(i,i_wt) = snow_can_wtrac(i,i_wt) +                    &
+                                   intercept_wtrac - unload_wtrac
+          IF (snow_can_wtrac(i,i_wt) > catch_snow(i)*ratio_snow_can) THEN
+            unload_wtrac = unload_wtrac + (snow_can_wtrac(i,i_wt)              &
+                                             - catch_snow(i)*ratio_snow_can)
+            snow_can_wtrac(i,i_wt) = catch_snow(i)*ratio_snow_can
+          END IF
+        ELSE
+          intercept_wtrac         = intercept(k) * ratio_snowfall
+          unload_wtrac            = unload(k) * ratio_snow_can
+          unload_wtrac            = MAX( MIN( unload_wtrac,                    &
                                        snow_can_wtrac(i,i_wt) ), 0.0 )
-        snow_can_wtrac(i,i_wt) = snow_can_wtrac(i,i_wt) +                      &
-                                 intercept_wtrac - unload_wtrac
+          snow_can_wtrac(i,i_wt)  = snow_can_wtrac(i,i_wt) +                   &
+                                       intercept_wtrac - unload_wtrac
+        END IF
         snowfall_wtrac(i,i_wt) = snowfall_wtrac(i,i_wt) +                      &
                                  graupfall_wtrac(i,i_wt) -                     &
                                  intercept_wtrac + unload_wtrac
-
       END DO
 !$OMP END DO
     END DO

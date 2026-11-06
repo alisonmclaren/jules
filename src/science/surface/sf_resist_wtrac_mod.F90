@@ -13,7 +13,7 @@ MODULE sf_resist_wtrac_mod
 
 !-----------------------------------------------------------------------------
 ! Description:
-!   Set resistance factors for water tracers (which will include the kinetic
+!   Set resistance factors for water tracers (which could include the kinetic
 !   fractionation factors for water isotopes in the future).
 !
 !   Resistance factors are set for the four different evaporative sources:
@@ -38,7 +38,7 @@ CHARACTER(LEN=*), PARAMETER, PRIVATE :: ModuleName='SF_RESIST_WTRAC_MOD'
 CONTAINS
 
 SUBROUTINE sf_resist_wtrac (i_wt, n, land_pts, surft_pts, surft_index,         &
- snowdep_surft, resfs, dq, catch, evap_srce_frac, cansnowtile,                 &
+ snowdep_surft, snow_surft, resfs, dq, catch, evap_srce_frac, cansnowtile,     &
  resf_wtrac)
 
 USE jules_water_tracers_mod, ONLY: n_evap_srce, evap_srce_snow,                &
@@ -46,6 +46,8 @@ USE jules_water_tracers_mod, ONLY: n_evap_srce, evap_srce_snow,                &
                                    evap_srce_lake
 USE jules_vegetation_mod,    ONLY: can_model
 USE jules_surface_types_mod, ONLY: lake
+USE jules_science_fixes_mod, ONLY: l_fix_neg_snow
+USE water_constants_mod,     ONLY: tm, rho_ice
 
 USE parkind1, ONLY: jprb, jpim
 USE yomhook, ONLY: lhook, dr_hook
@@ -67,6 +69,8 @@ INTEGER, INTENT(IN) ::                                                         &
 REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
  snowdep_surft(land_pts)                                                       &
                        ! IN Snow depth (m)
+,snow_surft(land_pts)                                                          &
+                       ! IN Lying snow on tiles (kg/m2)
 ,resfs(land_pts)                                                               &
                        ! IN Combined soil, stomatal and aerodynamic
                        !     resistance factor for fraction 1-fracaero.
@@ -97,6 +101,10 @@ INTEGER ::                                                                     &
 ,n_evap
              ! Loop counter (evaporative sources index)
 
+REAL(KIND=real_jlslsm) ::                                                      &
+ snow_test
+             ! Quantity used to test for presence of snow
+
 INTEGER(KIND=jpim), PARAMETER :: zhook_in  = 0
 INTEGER(KIND=jpim), PARAMETER :: zhook_out = 1
 REAL(KIND=jprb)               :: zhook_handle
@@ -108,22 +116,29 @@ IF (lhook) CALL dr_hook(ModuleName//':'//RoutineName,zhook_in,zhook_handle)
 !$OMP PARALLEL DO IF(surft_pts > 1)                                            &
 !$OMP SCHEDULE(STATIC)                                                         &
 !$OMP DEFAULT(NONE)                                                            &
-!$OMP PRIVATE(l,k,n_evap)                                                      &
+!$OMP PRIVATE(l,k,n_evap,snow_test)                                            &
 !$OMP SHARED(surft_pts,surft_index,i_wt,evap_srce_frac,dq,resf_wtrac,          &
-!$OMP        snowdep_surft,catch,can_model,cansnowtile,resfs,n,lake)
+!$OMP        snowdep_surft,snow_surft,catch,can_model,cansnowtile,resfs,n,     &
+!$OMP        lake,l_fix_neg_snow)
 DO k = 1,surft_pts
   l = surft_index(k)
 
+  ! Calculate snow quantity used in scheme to test for presence of snow
+  IF (l_fix_neg_snow) THEN
+    snow_test = MAX(snowdep_surft(l), snow_surft(l) / rho_ice)
+  ELSE
+    snow_test = snowdep_surft(l)
+  END IF
+
   ! Set resistance factors for water tracers
+
   DO n_evap = 1, n_evap_srce
-    ! Initialise to 0.0 so that there are only non-zero fluxes from
-    ! the evaporative surfaces set below
-    resf_wtrac(l,n_evap) = 0.0
+    ! Initialise to 1.0 (i.e. aerodynamic resistance only)
+    resf_wtrac(l,n_evap) = 1.0
   END DO
 
   ! Snow sublimation
-  ! No kinetic fractionation for sublimation
-  IF (snowdep_surft(l) > 0.0) THEN
+  IF (snow_test > 0.0) THEN
     IF (can_model == 4 .AND. cansnowtile) THEN
       ! Canopy snow model and snow sublimation has resistance factor < 1
       resf_wtrac(l,evap_srce_snow) = resfs(l)
@@ -137,25 +152,27 @@ DO k = 1,surft_pts
   ! Soil evapotranspiration (Bare soil evaporation + Transpiration)
   ! Evaporation is limited by soil moisture availability and stomatal
   ! resistance.
-  ! Kinetic fractionation will be added here for isotopes
-  IF (snowdep_surft(l) > 0.0 .OR. dq(l) < 0.0) THEN
-    ! Evaporation with no snow, or either sublimation or deposition with snow
+  IF (dq(l) < 0.0) THEN
+    ! Evaporation (with or without snow)
     resf_wtrac(l,evap_srce_soil) = resfs(l) * 1.0
-  ELSE
-    ! Condensation with no snow (No additional resistance)
-    resf_wtrac(l,evap_srce_soil) = 1.0
+  END IF
+
+  ! If using bug version, then there is additional resistance if there is snow
+  ! regardless of the direction of the flux
+  IF (.NOT. l_fix_neg_snow) THEN
+    IF ( .NOT. (can_model == 4 .AND. cansnowtile)) THEN
+      IF (snow_test > 0.0 .AND. dq(l) > 0.0) THEN
+        resf_wtrac(l,evap_srce_soil) = resfs(l) * 1.0
+      END IF
+    END IF
   END IF
 
   ! Canopy intercepted water
-  IF (catch(l) > 0.0) THEN
-    resf_wtrac(l,evap_srce_cano) = 1.0
-  END IF
+  resf_wtrac(l,evap_srce_cano) = 1.0
 
   ! Lake evaporation
-  IF (n == lake) THEN
-    ! Only set for lake tile
-    resf_wtrac(l,evap_srce_lake) = 1.0
-  END IF
+  resf_wtrac(l,evap_srce_lake) = 1.0
+
 END DO
 !$OMP END PARALLEL DO
 

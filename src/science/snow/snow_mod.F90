@@ -55,6 +55,8 @@ USE snowgrain_mod,   ONLY: snowgrain
 USE snowpack_mod,    ONLY: snowpack
 USE snowtherm_mod,   ONLY: snowtherm
 
+USE jules_science_fixes_mod, ONLY: l_fix_neg_snow
+
 USE water_constants_mod, ONLY:                                                 &
   ! imported scalar parameters
    lf
@@ -92,6 +94,9 @@ USE parkind1, ONLY: jprb, jpim
 USE yomhook, ONLY: lhook, dr_hook
 
 USE um_types, ONLY: real_jlslsm
+
+!TEMP*   AND REMOVE ei_surft from OMP list below...
+USE jules_print_mgr, ONLY: jules_message, jules_print, newline
 
 IMPLICIT NONE
 
@@ -522,21 +527,63 @@ END IF
 
 !$OMP END PARALLEL
 
-! Calculate surface melt for water tracers
+! Calculate surface increment for water tracers due to melt and sublimation
+! (Note, the water equivalent of this field is calculated in surface/sf_melt
+!  and passed into the snow module. But the water tracer field can be
+!  calculated here which saves having to pass an additional field around.)
 IF (l_wtrac_jls) THEN
 !$OMP PARALLEL DEFAULT(NONE)                                                   &
 !$OMP PRIVATE(k,i,n,i_wt,snow_ratio)                                           &
 !$OMP SHARED(surft_pts,surft_index,snow_surft_wtrac,snow_surft,melt_surft,     &
-!$OMP        melt_surft_wtrac,n_wtrac_jls,nsurft)
+!$OMP        melt_surft_wtrac,n_wtrac_jls,nsurft,wtrac_sn,ei_surft_wtrac,      &
+!$OMP        timestep,snowinc_surft,l_fix_neg_snow,ei_surft)
   DO i_wt = 1, n_wtrac_jls
     DO n = 1,nsurft
 !$OMP DO SCHEDULE(STATIC)
       DO k = 1,surft_pts(n)
         i = surft_index(k,n)
+
+        ! Water tracer ratio of surface snow used to calculate amount
+        ! of water tracer melt
+
         snow_ratio = wtrac_calc_ratio_fn_jules(i_wt,                           &
                            snow_surft_wtrac(i,n,i_wt),snow_surft(i,n))
         melt_surft_wtrac(i,n,i_wt) = melt_surft(i,n) * snow_ratio
-      END DO
+
+        ! Copy logic in sf_melt for setting snowinc_surft
+        IF (melt_surft(i,n) > 0.0) THEN
+
+          wtrac_sn%snowinc_surft(i,n,i_wt)=                                    &
+                               - ( ei_surft_wtrac(i,n,i_wt)                    &
+                               + melt_surft_wtrac(i,n,i_wt) ) * timestep
+
+        ELSE
+          IF (l_fix_neg_snow) THEN
+            wtrac_sn%snowinc_surft(i,n,i_wt)= - MIN(                           &
+                                           snow_surft_wtrac(i,n,i_wt),         &
+                                           ei_surft_wtrac(i,n,i_wt)*timestep )
+          ELSE
+            wtrac_sn%snowinc_surft(i,n,i_wt)=                                  &
+                                         - ei_surft_wtrac(i,n,i_wt)*timestep
+          END IF
+
+        END IF
+
+        IF (l_fix_neg_snow) THEN
+          ! If increment would remove more water tracer than is available,
+          ! then reduce melt
+          IF (wtrac_sn%snowinc_surft(i,n,i_wt) < 0.0 .AND.                     &
+              - wtrac_sn%snowinc_surft(i,n,i_wt) > snow_surft_wtrac(i,n,i_wt)) &
+            THEN
+
+            melt_surft_wtrac(i,n,i_wt)       = melt_surft_wtrac(i,n,i_wt) +    &
+            (wtrac_sn%snowinc_surft(i,n,i_wt) + snow_surft_wtrac(i,n,i_wt))    &
+                                                    /timestep
+            wtrac_sn%snowinc_surft(i,n,i_wt) = - snow_surft_wtrac(i,n,i_wt)
+          END IF
+        END IF
+
+     END DO
 !$OMP END DO
     END DO
   END DO
@@ -558,7 +605,7 @@ DO n = 1,nsurft
 !$OMP PRIVATE(k,i,i_wt)                                                        &
 !$OMP SHARED(surft_pts,surft_index,snow_can,snow_surft,snowmass,snow_grnd,     &
 !$OMP        timestep,snowinc_surft,n,l_wtrac_jls,wtrac_sn,snow_surft_wtrac,   &
-!$OMP        snow_grnd_wtrac,ei_surft_wtrac,n_wtrac_jls,melt_surft_wtrac)
+!$OMP        snow_grnd_wtrac,n_wtrac_jls)
 !$OMP DO SCHEDULE(STATIC)
     DO k = 1,surft_pts(n)
       i = surft_index(k,n)
@@ -585,9 +632,8 @@ DO n = 1,nsurft
           !---------------------------------------------------------------------
           ! Subtract sublimation and melt of canopy snow.
           !---------------------------------------------------------------------
-          wtrac_sn%snow_can(i,n,i_wt) = wtrac_sn%snow_can(i,n,i_wt) -          &
-               ( ei_surft_wtrac(i,n,i_wt) + melt_surft_wtrac(i,n,i_wt) )       &
-                * timestep
+          wtrac_sn%snow_can(i,n,i_wt) = wtrac_sn%snow_can(i,n,i_wt)           &
+                                        + wtrac_sn%snowinc_surft(i,n,i_wt)
 
         END DO
 !$OMP END DO
@@ -697,7 +743,6 @@ DO n = 1,nsurft
                     snow_can(:,n), wtrac_sn%snow_can(:,n_wt,:),                &
                     snowfall, graupfall, wtrac_sn%snowfall,                    &
                     wtrac_sn%graupfall)
-
 
   !---------------------------------------------------------------------------
   ! Divide snow pack into layers
@@ -837,6 +882,13 @@ DO n = 1,nsurft
     m = n
   END IF !nsoilt
 
+  ! Set tile pointer for water tracers
+  IF (l_wtrac_jls) THEN
+    n_wt = n
+  ELSE
+    n_wt = 1    ! Dummy pointer
+  END IF
+
   IF ((l_flake_model) .AND. (n == lake)) THEN
     CALL snowpack ( n, land_pts, surft_pts(n), n_wtrac_jls, timestep,          &
                   cansnowtile(n), nsnow(:,n), surft_index(:,n), nsurft, csnow, &
@@ -844,7 +896,8 @@ DO n = 1,nsurft
                   ksnow, rho_snow_grnd(:,n), smcl1_soilt(:,m),                 &
                   snowfall, sthf1_soilt(:,m), surf_htf_surft(:,n),             &
                   tile_frac, smvcst1_soilt(:,m), ei_surft_wtrac,               &
-                  wtrac_sn%infiltration, ds_sl,                                &
+                  wtrac_sn%infiltration,                                       &
+                  wtrac_sn%snowinc_surft(:,n_wt,:), ds_sl,                     &
                   melt_surft(:,n), snowinc_surft(:,n), sice_sl, sliq_sl,       &
                   snomlt_sub_htf, snowdepth(:,n), snowmass, tsnow_sl,          &
                   ts1_lake_gb, tsurf_elev_surft(:,n),                          &
@@ -863,7 +916,8 @@ DO n = 1,nsurft
                   ksnow, rho_snow_grnd(:,n), smcl1_soilt(:,m),                 &
                   snowfall, sthf1_soilt(:,m), surf_htf_surft(:,n),             &
                   tile_frac, smvcst1_soilt(:,m), ei_surft_wtrac,               &
-                  wtrac_sn%infiltration, ds_sl,                                &
+                  wtrac_sn%infiltration,                                       &
+                  wtrac_sn%snowinc_surft(:,n_wt,:), ds_sl,                     &
                   melt_surft(:,n), snowinc_surft(:,n), sice_sl, sliq_sl,       &
                   snomlt_sub_htf, snowdepth(:,n), snowmass, tsnow_sl,          &
                   t_soil1_soilt(:,m), tsurf_elev_surft(:,n),                   &

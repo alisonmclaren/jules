@@ -26,7 +26,8 @@ SUBROUTINE snowpack ( surft_n, land_pts, surft_pts, n_wtrac_jls, timestep,     &
                       ei_surft, hcaps1_soilt, hcons, infiltration, ksnow,      &
                       rho_snow_grnd, smcl1_soilt, snowfall, sthf1_soilt,       &
                       surf_htf_surft, tile_frac, smvcst1_soilt,                &
-                      ei_surft_wtrac, infiltration_wtrac, ds,                  &
+                      ei_surft_wtrac, infiltration_wtrac,                      &
+                      snowinc_surft_wtrac, ds,                                 &
                       melt_surft, snowinc_surft, sice, sliq, snomlt_sub_htf,   &
                       snowdepth, snowmass, tsnow,                              &
                       t_soil1_soilt, tsurf_elev_surft,                         &
@@ -168,8 +169,10 @@ REAL(KIND=real_jlslsm), INTENT(IN) ::                                          &
   ei_surft_wtrac(land_pts,nsurft,n_wtrac_jls),                                 &
     ! Water tracer sublimation of snow for all tiles (kg/m2/s).
     ! (Note, unlike the water equivalent, this is the full field for all tiles.)
-  infiltration_wtrac(land_pts,n_wtrac_jls)
+  infiltration_wtrac(land_pts,n_wtrac_jls),                                    &
     ! Water tracer content in rainfall infiltrating into snowpack (kg/m2).
+  snowinc_surft_wtrac(land_pts,n_wtrac_jls)
+    ! Total increment to water tracer surface snow (kg m-2 TS-1).
 
 ! Array arguments with intent(inout)
 TYPE (strnewsfdiag), INTENT(IN OUT) :: sf_diag
@@ -415,10 +418,8 @@ DO k = 1,surft_pts
       IF (l_wtrac_jls) THEN
         ! Repeat for water tracers
         DO i_wt = 1,n_wtrac_jls
-          snowmass_wtrac(i,i_wt) = snowmass_wtrac(i,i_wt) -                    &
-                                  ( ei_surft_wtrac(i,surft_n,i_wt)             &
-                                    + melt_surft_wtrac(i,surft_n,i_wt) )       &
-                                  * timestep
+          snowmass_wtrac(i,i_wt) = snowmass_wtrac(i,i_wt)                      &
+                                   + snowinc_surft_wtrac(i,i_wt)
         END DO
       END IF
 

@@ -414,7 +414,7 @@ DO j = 1, rows
       END IF
       imax_q = i
       jmax_q = j
-    END IF
+    END IF   
   END DO
 END DO
 
