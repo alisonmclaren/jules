@@ -208,7 +208,7 @@ IF ( cansnowtile ) THEN
       ! and ensure that the final canopy snow amount does not exceed
       ! the canopy capacity.
       intercept(k) = MAX(0.0, intercept(k))
-      unload(k)    = MAX(0.0, unload(k))
+      unload(k)    = MAX( MIN( unload(k), snow_can(i) ), 0.0 )
       snow_can(i) = snow_can(i) + intercept(k) - unload(k)
       IF (snow_can(i) > catch_snow(i)) THEN
         unload(k) = unload(k) + (snow_can(i) - catch_snow(i))

@@ -262,20 +262,20 @@ DO n = 1,nsurft
     l = surft_index(k,n)
     e_surft_old(l,n) = fqw_surft(l,n)
     IF (l_fix_neg_snow) THEN
+      le_surft_old(l,n) = lc * fqw_surft(l,n)
       ! Calculate the sublimation or deposition on the snow fraction
       ! consistently with the assumed resistance network. The canopy
       ! evaporation must be set here to allow it to be modified to
       ! account for exhaustion of the snow store.
-      IF (resft(l,n) > 0.0) ecan_surft(l,n) =                                  &
-                          (1.0 - flake(l,n)) *                                 &
+      IF (resft(l,n) > 0.0) THEN
+        ecan_surft(l,n) = (1.0 - flake(l,n)) *                                 &
                           (fracaero_t(l,n) - fracaero_s(l,n)) *                &
                           fqw_surft(l,n) / resft(l,n)
-      le_surft_old(l,n) = lc * fqw_surft(l,n)
-      IF (snow_surft(l,n)  >   0.0) THEN
-        ei_surft(l,n) = (1.0 - flake(l,n)) * fracaero_s(l,n) *                 &
-                        fqw_surft(l,n) / resft(l,n)
-        le_surft_old(l,n) = le_surft_old(l,n) + lf * ei_surft(l,n)
-
+        IF (snow_surft(l,n)  >   0.0) THEN
+          ei_surft(l,n) = (1.0 - flake(l,n)) * fracaero_s(l,n) *               &
+                          fqw_surft(l,n) / resft(l,n)
+          le_surft_old(l,n) = le_surft_old(l,n) + lf * ei_surft(l,n)
+        END IF
       END IF
     ELSE
       IF (snow_surft(l,n)  >   0.0) THEN
